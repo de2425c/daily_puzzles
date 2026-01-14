@@ -74,10 +74,7 @@ function formatFrequency(freq) {
   return `${(freq * 100).toFixed(0)}%`
 }
 
-function formatEV(ev, freq) {
-  // Don't show EV for <1% frequency actions - the values are unreliable
-  // (off-equilibrium paths in the solver tree)
-  if (freq < 0.01) return '-'
+function formatEV(ev) {
   return ev >= 0 ? `+${ev.toFixed(2)}bb` : `${ev.toFixed(2)}bb`
 }
 
@@ -302,7 +299,7 @@ async function regenerate(withOptions = false) {
                     <span v-if="action === spot.correct_action" class="check">&#10003;</span>
                   </td>
                   <td>{{ formatFrequency(spot.action_frequencies[action]) }}</td>
-                  <td>{{ formatEV(spot.ev_by_action[action] || 0, spot.action_frequencies[action]) }}</td>
+                  <td>{{ formatEV(spot.ev_by_action[action] || 0) }}</td>
                 </tr>
               </tbody>
             </table>

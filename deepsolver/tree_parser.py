@@ -23,6 +23,7 @@ class TreeNode:
     strategy: list[list[float]] | None  # shape (num_actions, 1326)
     ev: list[list[float]] | None  # shape (2 players, 1326)
     ranges: list[list[int]] | None  # shape (2 players, 1326)
+    bets: list[int] | None  # [IP_bet, OOP_bet] in units - tracks money committed
     children: list[TreeNode] = field(default_factory=list)
 
     def is_terminal(self) -> bool:
@@ -50,6 +51,9 @@ def parse_tree(raw: dict) -> TreeNode:
     ev = data.get("EV") if data else None
     ranges = data.get("ranges") if data else None
 
+    # Parse bets array (tracks money committed by each player)
+    bets = raw.get("bets")
+
     # Create node
     node = TreeNode(
         path=raw.get("_pio_path", ""),
@@ -60,6 +64,7 @@ def parse_tree(raw: dict) -> TreeNode:
         strategy=strategy,
         ev=ev,
         ranges=ranges,
+        bets=bets,
     )
 
     # Recursively parse children
@@ -203,7 +208,11 @@ def get_ev_by_action(
     """
     Return EV for each action at this node.
 
-    The EV for an action is taken from the child node's EV (continuation value).
+    The raw EV at child nodes includes the bet amount as part of the value.
+    We subtract the bet to get the true action EV (net expected value).
+
+    In GTO equilibrium, all actions with positive frequency should have
+    approximately equal EV after this correction.
 
     Args:
         node: Tree node with children
@@ -224,7 +233,15 @@ def get_ev_by_action(
         if i < len(node.children):
             child = node.children[i]
             if child.ev is not None:
-                ev = child.ev[player_id][combo_idx] / UNITS_PER_BB
+                raw_ev = child.ev[player_id][combo_idx] / UNITS_PER_BB
+
+                # Subtract the bet amount to get true action EV
+                # The child's bets array tracks money committed at that node
+                bet_amount = 0.0
+                if child.bets is not None:
+                    bet_amount = child.bets[player_id] / UNITS_PER_BB
+
+                ev = raw_ev - bet_amount
             else:
                 ev = 0.0
         else:
