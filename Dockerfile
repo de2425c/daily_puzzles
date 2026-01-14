@@ -11,6 +11,9 @@ COPY deepsolver/ ./deepsolver/
 COPY storage/ ./storage/
 COPY api/ ./api/
 
+# Copy data files
+COPY solver_hand_order.txt .
+
 # Cloud Run uses PORT env variable
 ENV PORT=8080
 
