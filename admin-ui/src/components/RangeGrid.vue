@@ -17,8 +17,14 @@ const props = defineProps({
   heroCombo: {
     type: String,
     default: ''
+  },
+  clickable: {
+    type: Boolean,
+    default: false
   }
 })
+
+const emit = defineEmits(['select-combo'])
 
 // Ranks from high to low (A-2)
 const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2']
@@ -99,7 +105,8 @@ const gridData = computed(() => {
         activeCount: 0,
         blockedCount: 0,
         isHero: heroCategory && heroCategory.ranks === (isPair ? label : label.slice(0, 2)) &&
-                (isPair || (isSuited ? heroCategory.type === 'suited' : heroCategory.type === 'offsuit'))
+                (isPair || (isSuited ? heroCategory.type === 'suited' : heroCategory.type === 'offsuit')),
+        combos: []  // Store available combos for clicking
       }
     })
   )
@@ -140,6 +147,7 @@ const gridData = computed(() => {
       cell.weightSum += weight
       if (weight > 0) {
         cell.activeCount++
+        cell.combos.push(combo)  // Store combo for clicking
       }
     }
   })
@@ -159,6 +167,15 @@ const gridData = computed(() => {
 
   return grid
 })
+
+// Handle cell click - select first available combo from cell
+function handleCellClick(cell) {
+  if (!props.clickable || cell.combos.length === 0) return
+
+  // Pick the first combo with weight > 0
+  const combo = cell.combos[0]
+  emit('select-combo', combo)
+}
 
 // Calculate total stats
 const totalStats = computed(() => {
@@ -236,10 +253,12 @@ function getCellStyle(cell) {
             'offsuit': cell.type === 'offsuit',
             'hero': cell.isHero,
             'empty': cell.frequency === 0 && cell.blockedCount < cell.totalCombos,
-            'blocked': cell.blockedCount === cell.totalCombos
+            'blocked': cell.blockedCount === cell.totalCombos,
+            'clickable': clickable && cell.combos.length > 0
           }"
           :style="getCellStyle(cell)"
-          :title="`${cell.label}: ${(cell.frequency * 100).toFixed(0)}% (${cell.activeCount}/${cell.totalCombos - cell.blockedCount} combos)`"
+          :title="`${cell.label}: ${(cell.frequency * 100).toFixed(0)}% (${cell.activeCount}/${cell.totalCombos - cell.blockedCount} combos)${clickable && cell.combos.length > 0 ? ' - Click to select' : ''}`"
+          @click="handleCellClick(cell)"
         >
           <span class="cell-label">{{ cell.label }}</span>
           <span v-if="cell.frequency > 0" class="cell-freq">{{ Math.round(cell.frequency * 100) }}</span>
@@ -340,5 +359,15 @@ function getCellStyle(cell) {
 .grid-cell:not(.header):not(.corner):hover {
   border-color: #1976d2;
   z-index: 2;
+}
+
+.grid-cell.clickable {
+  cursor: pointer;
+}
+
+.grid-cell.clickable:hover {
+  border-color: #1976d2;
+  border-width: 2px;
+  box-shadow: 0 0 4px rgba(25, 118, 210, 0.4);
 }
 </style>

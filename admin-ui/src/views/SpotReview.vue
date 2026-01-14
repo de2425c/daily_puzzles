@@ -116,6 +116,32 @@ async function loadRangeData() {
   }
 }
 
+async function handleComboSelect(combo) {
+  // Regenerate spot with the selected combo
+  regenerating.value = true
+  error.value = null
+
+  try {
+    const simId = spot.value.source_task_id.replace('sim-', '')
+
+    // Determine hero position for API (IP or OOP)
+    const heroIsOOP = spot.value.hero_position === 'BB' || spot.value.hero_position === 'SB'
+    const heroPosition = heroIsOOP ? 'OOP' : 'IP'
+
+    const result = await api.generateRandomSpot(simId, {
+      heroPosition,
+      heroCombo: combo
+    })
+
+    // Navigate to the new spot
+    router.push(`/spots/${result.spot_id}`)
+  } catch (e) {
+    error.value = e.response?.data?.detail || e.message
+  } finally {
+    regenerating.value = false
+  }
+}
+
 // Load on mount
 onMounted(() => loadSpot(route.params.id))
 
@@ -401,12 +427,14 @@ async function regenerate(withOptions = false) {
 
           <!-- Hero's Range at Decision Point -->
           <div v-if="heroRange && handOrder" class="range-section">
-            <div class="section-label">Hero's Range ({{ spot.hero_position }})</div>
+            <div class="section-label">Hero's Range ({{ spot.hero_position }}) <span class="click-hint">Click a hand to select it</span></div>
             <RangeGrid
               :range="heroRange"
               :hand-order="handOrder"
               :board="spot.board"
               :hero-combo="spot.hero_combo"
+              :clickable="true"
+              @select-combo="handleComboSelect"
             />
           </div>
         </div>
@@ -742,6 +770,13 @@ async function regenerate(withOptions = false) {
   border-radius: 8px;
   padding: 12px 16px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.click-hint {
+  font-size: 10px;
+  font-weight: normal;
+  color: #999;
+  margin-left: 8px;
 }
 
 table {
