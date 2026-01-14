@@ -60,9 +60,9 @@ class ApproveRequest(BaseModel):
 
     title: str
     question_text: str
-    answer_options: list[str]
-    correct_answer: str
-    explanation: str
+    answer_options: list[str]  # Actions to include in the question
+    correct_answers: list[str]  # Can have multiple correct answers
+    explanations: dict[str, str]  # Per-action explanations: {"Check": "...", "Bet 1.5bb": "..."}
     difficulty: int
     tags: list[str]
     scheduled_date: str  # YYYY-MM-DD format

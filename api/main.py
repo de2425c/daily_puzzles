@@ -190,12 +190,12 @@ def approve_spot(spot_id: str, request: ApproveRequest):
         spot=spot,
         puzzle_id=0,  # Not used
         title=request.title,
-        explanation=request.explanation,
+        explanation="",  # Not used - we have per-action explanations
         difficulty=request.difficulty,
         answer_options=request.answer_options,
     )
 
-    # Create scheduled puzzle
+    # Create scheduled puzzle with multiple correct answers and per-action explanations
     puzzle = ScheduledPuzzle(
         id=str(uuid.uuid4()),
         scheduled_date=request.scheduled_date,
@@ -207,8 +207,8 @@ def approve_spot(spot_id: str, request: ApproveRequest):
         action=temp_puzzle.action,
         pot_size_at_decision=spot.pot_size_bb,
         answer_options=request.answer_options,
-        correct_answer=request.correct_answer,
-        explanation=request.explanation,
+        correct_answers=request.correct_answers,
+        explanations=request.explanations,
         difficulty=request.difficulty,
         tags=request.tags,
         created_at=datetime.utcnow(),
@@ -226,7 +226,7 @@ def approve_spot(spot_id: str, request: ApproveRequest):
         title=puzzle.title,
         question_text=puzzle.question_text,
         hero=puzzle.hero,
-        correct_answer=puzzle.correct_answer,
+        correct_answer=request.correct_answers[0] if request.correct_answers else "",
         difficulty=puzzle.difficulty,
         created_at=puzzle.created_at.isoformat(),
     )

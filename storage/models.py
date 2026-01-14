@@ -125,8 +125,8 @@ class ScheduledPuzzle:
     action: dict
     pot_size_at_decision: float
     answer_options: list[str]
-    correct_answer: str
-    explanation: str
+    correct_answers: list[str]  # Can have multiple correct answers
+    explanations: dict[str, str]  # Per-action explanations: {"Check": "...", "Bet 1.5bb": "..."}
     difficulty: int
     tags: list[str]
     created_at: datetime
@@ -144,8 +144,8 @@ class ScheduledPuzzle:
             "Action": self.action,
             "PotSizeAtDecision": self.pot_size_at_decision,
             "AnswerOptions": self.answer_options,
-            "CorrectAnswer": self.correct_answer,
-            "Explanation": self.explanation,
+            "CorrectAnswers": self.correct_answers,
+            "Explanations": self.explanations,
             "Difficulty": self.difficulty,
             "Tags": self.tags,
             "created_at": self.created_at.isoformat(),
@@ -154,6 +154,21 @@ class ScheduledPuzzle:
     @classmethod
     def from_firestore(cls, doc: dict) -> "ScheduledPuzzle":
         """Create ScheduledPuzzle from Firestore document."""
+        # Handle both old format (single answer) and new format (multiple answers)
+        correct_answers = doc.get("CorrectAnswers")
+        if correct_answers is None:
+            # Legacy single answer format
+            correct_answers = [doc["CorrectAnswer"]] if doc.get("CorrectAnswer") else []
+
+        explanations = doc.get("Explanations")
+        if explanations is None:
+            # Legacy single explanation format - map to first correct answer
+            old_explanation = doc.get("Explanation", "")
+            if correct_answers and old_explanation:
+                explanations = {correct_answers[0]: old_explanation}
+            else:
+                explanations = {}
+
         return cls(
             id=doc["id"],
             scheduled_date=doc["scheduled_date"],
@@ -165,8 +180,8 @@ class ScheduledPuzzle:
             action=doc["Action"],
             pot_size_at_decision=doc["PotSizeAtDecision"],
             answer_options=doc["AnswerOptions"],
-            correct_answer=doc["CorrectAnswer"],
-            explanation=doc["Explanation"],
+            correct_answers=correct_answers,
+            explanations=explanations,
             difficulty=doc["Difficulty"],
             tags=doc["Tags"],
             created_at=datetime.fromisoformat(doc["created_at"]),

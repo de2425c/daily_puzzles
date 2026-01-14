@@ -20,13 +20,13 @@ const regenCombo = ref('')     // '' or specific combo like 'AhKs'
 // Form data
 const title = ref('')
 const questionText = ref('')
-const explanation = ref('')
 const difficulty = ref(2)
-const answerOptions = ref([])
-const correctAnswer = ref('')
 const tags = ref([])
 const newTag = ref('')
 const scheduledDate = ref('')
+
+// Action data: {action: string, selected: bool, correct: bool, explanation: string}
+const actionData = ref([])
 
 // Get today's date in YYYY-MM-DD format
 const today = new Date().toISOString().split('T')[0]
@@ -49,8 +49,20 @@ async function loadSpot(spotId) {
 
   try {
     spot.value = await api.getSpot(spotId)
-    answerOptions.value = [...spot.value.available_actions]
-    correctAnswer.value = spot.value.correct_action
+
+    // Initialize action data from available actions
+    // Pre-select actions with >1% frequency and mark highest frequency as correct
+    actionData.value = spot.value.available_actions.map(action => {
+      const freq = spot.value.action_frequencies[action] || 0
+      const isCorrect = action === spot.value.correct_action
+      return {
+        action,
+        selected: freq > 0.01,  // Select if >1% frequency
+        correct: isCorrect,
+        explanation: ''
+      }
+    })
+
     tags.value = [...suggestedTags.value]
     questionText.value = `You are ${spot.value.hero_position} with ${spot.value.hero_combo}. What's your play?`
   } catch (e) {
@@ -115,13 +127,47 @@ function removeTag(tag) {
   tags.value = tags.value.filter(t => t !== tag)
 }
 
+// Computed values for the form
+const selectedActions = computed(() =>
+  actionData.value.filter(a => a.selected).map(a => a.action)
+)
+
+const correctActions = computed(() =>
+  actionData.value.filter(a => a.selected && a.correct).map(a => a.action)
+)
+
+const explanationsMap = computed(() => {
+  const map = {}
+  actionData.value.filter(a => a.selected).forEach(a => {
+    map[a.action] = a.explanation
+  })
+  return map
+})
+
 async function approve() {
-  if (!title.value || !explanation.value) {
-    error.value = 'Please fill in title and explanation'
+  if (!title.value) {
+    error.value = 'Please fill in the title'
     return
   }
   if (!scheduledDate.value) {
     error.value = 'Please select a scheduled date'
+    return
+  }
+  if (selectedActions.value.length < 2) {
+    error.value = 'Please select at least 2 answer options'
+    return
+  }
+  if (correctActions.value.length === 0) {
+    error.value = 'Please mark at least one answer as correct'
+    return
+  }
+
+  // Check that correct answers have explanations
+  const missingExplanations = actionData.value
+    .filter(a => a.selected && a.correct && !a.explanation.trim())
+    .map(a => a.action)
+  if (missingExplanations.length > 0) {
+    error.value = `Please add explanations for correct answers: ${missingExplanations.join(', ')}`
     return
   }
 
@@ -132,9 +178,9 @@ async function approve() {
     await api.approveSpot(spot.value.id, {
       title: title.value,
       question_text: questionText.value,
-      answer_options: answerOptions.value,
-      correct_answer: correctAnswer.value,
-      explanation: explanation.value,
+      answer_options: selectedActions.value,
+      correct_answers: correctActions.value,
+      explanations: explanationsMap.value,
       difficulty: difficulty.value,
       tags: tags.value,
       scheduled_date: scheduledDate.value,
@@ -277,12 +323,13 @@ async function regenerate(withOptions = false) {
             </div>
           </div>
 
-          <!-- Optimal Play Table -->
+          <!-- Optimal Play Table with Selection -->
           <div class="optimal-section">
-            <div class="section-label">Optimal Play</div>
+            <div class="section-label">Optimal Play (Select answers to include)</div>
             <table>
               <thead>
                 <tr>
+                  <th class="col-select">Include</th>
                   <th>Action</th>
                   <th>Freq</th>
                   <th>EV</th>
@@ -290,16 +337,19 @@ async function regenerate(withOptions = false) {
               </thead>
               <tbody>
                 <tr
-                  v-for="action in spot.available_actions"
-                  :key="action"
-                  :class="{ correct: action === spot.correct_action }"
+                  v-for="(actionItem, index) in actionData"
+                  :key="actionItem.action"
+                  :class="{ correct: actionItem.action === spot.correct_action, selected: actionItem.selected }"
                 >
-                  <td>
-                    {{ formatAction(action) }}
-                    <span v-if="action === spot.correct_action" class="check">&#10003;</span>
+                  <td class="col-select">
+                    <input type="checkbox" v-model="actionData[index].selected" />
                   </td>
-                  <td>{{ formatFrequency(spot.action_frequencies[action]) }}</td>
-                  <td>{{ formatEV(spot.ev_by_action[action] || 0) }}</td>
+                  <td>
+                    {{ formatAction(actionItem.action) }}
+                    <span v-if="actionItem.action === spot.correct_action" class="check">&#10003;</span>
+                  </td>
+                  <td>{{ formatFrequency(spot.action_frequencies[actionItem.action]) }}</td>
+                  <td>{{ formatEV(spot.ev_by_action[actionItem.action] || 0) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -323,22 +373,42 @@ async function regenerate(withOptions = false) {
               <textarea v-model="questionText" rows="2"></textarea>
             </div>
 
-            <div class="form-group">
-              <label>Explanation</label>
-              <textarea v-model="explanation" rows="4" placeholder="Explain why this is the correct play..."></textarea>
+            <!-- Answer Options with Correct/Explanation -->
+            <div class="form-group answers-section">
+              <label>Answer Options ({{ selectedActions.length }} selected, {{ correctActions.length }} correct)</label>
+              <div class="answer-cards">
+                <div
+                  v-for="(actionItem, index) in actionData.filter(a => a.selected)"
+                  :key="actionItem.action"
+                  class="answer-card"
+                  :class="{ 'is-correct': actionItem.correct }"
+                >
+                  <div class="answer-header">
+                    <label class="correct-checkbox">
+                      <input
+                        type="checkbox"
+                        :checked="actionItem.correct"
+                        @change="actionData.find(a => a.action === actionItem.action).correct = $event.target.checked"
+                      />
+                      <span class="answer-action">{{ formatAction(actionItem.action) }}</span>
+                      <span v-if="actionItem.correct" class="correct-badge">Correct</span>
+                    </label>
+                    <span class="answer-freq">{{ formatFrequency(spot.action_frequencies[actionItem.action]) }}</span>
+                  </div>
+                  <textarea
+                    v-model="actionData.find(a => a.action === actionItem.action).explanation"
+                    rows="2"
+                    :placeholder="actionItem.correct ? 'Explain why this is correct...' : 'Optional: explain why this is wrong...'"
+                    class="answer-explanation"
+                  ></textarea>
+                </div>
+              </div>
             </div>
 
-            <div class="form-row form-row-3">
+            <div class="form-row form-row-2">
               <div class="form-group">
                 <label>Scheduled Date</label>
                 <input type="date" v-model="scheduledDate" />
-              </div>
-
-              <div class="form-group">
-                <label>Correct Answer</label>
-                <select v-model="correctAnswer">
-                  <option v-for="opt in answerOptions" :key="opt" :value="opt">{{ opt }}</option>
-                </select>
               </div>
 
               <div class="form-group">
@@ -635,6 +705,25 @@ tr.correct {
   background: #d4edda;
 }
 
+tr.selected {
+  background: #e3f2fd;
+}
+
+tr.selected.correct {
+  background: #c8e6c9;
+}
+
+.col-select {
+  width: 50px;
+  text-align: center;
+}
+
+.col-select input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
 .check {
   color: #28a745;
   margin-left: 6px;
@@ -682,8 +771,87 @@ h2 {
   gap: 12px;
 }
 
+.form-row-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
 .form-row-3 {
   grid-template-columns: 1fr 1fr 1fr;
+}
+
+/* Answer cards */
+.answers-section {
+  margin-top: 8px;
+}
+
+.answer-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.answer-card {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.answer-card.is-correct {
+  background: #d4edda;
+  border-color: #28a745;
+}
+
+.answer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.correct-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.correct-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.answer-action {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.correct-badge {
+  background: #28a745;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.answer-freq {
+  color: #666;
+  font-size: 12px;
+}
+
+.answer-explanation {
+  width: 100%;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.answer-card.is-correct .answer-explanation {
+  border-color: #28a745;
 }
 
 .tags-editor {
