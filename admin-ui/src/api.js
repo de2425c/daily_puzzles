@@ -74,6 +74,17 @@ export default {
     return response.data
   },
 
+  // Hand order for range grid display
+  _handOrderCache: null,
+  async getHandOrder() {
+    if (this._handOrderCache) {
+      return this._handOrderCache
+    }
+    const response = await api.get('/hand-order')
+    this._handOrderCache = response.data.hands
+    return this._handOrderCache
+  },
+
   async createTurnSim(simId, flopActionPath, turnCard = null, iterations = 500) {
     const response = await api.post(`/sims/${simId}/create-turn-sim`, {
       flop_action_path: flopActionPath,

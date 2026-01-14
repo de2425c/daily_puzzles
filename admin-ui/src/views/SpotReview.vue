@@ -2,6 +2,7 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
+import RangeGrid from '../components/RangeGrid.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,6 +12,10 @@ const loading = ref(true)
 const saving = ref(false)
 const regenerating = ref(false)
 const error = ref(null)
+
+// Range data for RangeGrid
+const heroRange = ref(null)
+const handOrder = ref(null)
 
 // Regenerate options
 const showRegenOptions = ref(false)
@@ -46,6 +51,7 @@ async function loadSpot(spotId) {
   error.value = null
   spot.value = null
   title.value = ''
+  heroRange.value = null
 
   try {
     spot.value = await api.getSpot(spotId)
@@ -65,10 +71,48 @@ async function loadSpot(spotId) {
 
     tags.value = [...suggestedTags.value]
     questionText.value = `You are ${spot.value.hero_position} with ${spot.value.hero_combo}. What's your play?`
+
+    // Fetch range data for the decision point
+    await loadRangeData()
   } catch (e) {
     error.value = e.message
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRangeData() {
+  if (!spot.value?.source_task_id || !spot.value?.tree_path) return
+
+  try {
+    // Extract sim ID from source_task_id (format: "sim-{uuid}")
+    const simId = spot.value.source_task_id.replace('sim-', '')
+
+    // Fetch hand order (cached after first load)
+    if (!handOrder.value) {
+      handOrder.value = await api.getHandOrder()
+    }
+
+    // Fetch ranges at this tree path
+    const rangeData = await api.getTreeRanges(simId, spot.value.tree_path)
+
+    // Determine which range is hero's based on position
+    // IP = player 0, OOP = player 1
+    const isHeroIP = spot.value.hero_position === spot.value.ip_position ||
+      (spot.value.hero_position !== 'BB' && spot.value.hero_position !== 'SB')
+
+    // Actually, we need to check the spot data for ip_position
+    // The spot has hero_position and villain_position
+    // In postflop, the positions like "BB", "BTN" etc are used
+    // IP is typically BTN, CO, HJ etc vs BB who is OOP
+
+    // Simple heuristic: BB/SB are usually OOP postflop
+    const heroIsOOP = spot.value.hero_position === 'BB' || spot.value.hero_position === 'SB'
+
+    heroRange.value = heroIsOOP ? rangeData.oop_range : rangeData.ip_range
+  } catch (e) {
+    console.error('Failed to load range data:', e)
+    // Don't fail the whole load, just skip range display
   }
 }
 
@@ -353,6 +397,17 @@ async function regenerate(withOptions = false) {
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <!-- Hero's Range at Decision Point -->
+          <div v-if="heroRange && handOrder" class="range-section">
+            <div class="section-label">Hero's Range ({{ spot.hero_position }})</div>
+            <RangeGrid
+              :range="heroRange"
+              :hand-order="handOrder"
+              :board="spot.board"
+              :hero-combo="spot.hero_combo"
+            />
           </div>
         </div>
 
@@ -676,6 +731,13 @@ async function regenerate(withOptions = false) {
 
 /* Optimal Play */
 .optimal-section {
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.range-section {
   background: #fff;
   border-radius: 8px;
   padding: 12px 16px;

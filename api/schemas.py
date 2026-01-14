@@ -148,6 +148,8 @@ class TreeRangesResponse(BaseModel):
     pot_size_bb: float
     ip_combos: int
     oop_combos: int
+    ip_range: list[int] | None = None   # 1326 weights for IP player
+    oop_range: list[int] | None = None  # 1326 weights for OOP player
 
 
 class CreateTurnSimRequest(BaseModel):

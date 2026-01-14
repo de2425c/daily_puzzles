@@ -657,6 +657,7 @@ def get_tree_ranges(sim_id: str, path: str):
     Get ranges at a tree node.
 
     Used by TurnBuilder to show combo counts after selecting actions.
+    Also returns full 1326-element range arrays for range grid display.
     """
     sim = storage.get_sim(sim_id)
     if not sim:
@@ -674,7 +675,21 @@ def get_tree_ranges(sim_id: str, path: str):
         pot_size_bb=result["pot_size"] / UNITS_PER_BB,
         ip_combos=result["ip_combos"],
         oop_combos=result["oop_combos"],
+        ip_range=result.get("ip_range"),
+        oop_range=result.get("oop_range"),
     )
+
+
+@app.get("/hand-order")
+def get_hand_order():
+    """
+    Get the canonical order of 1326 poker hand combos.
+
+    Used by frontend to convert range array indices to combo strings
+    for displaying the 13x13 range grid.
+    """
+    from deepsolver.hand_utils import HAND_ORDER
+    return {"hands": HAND_ORDER}
 
 
 @app.post("/sims/{sim_id}/create-turn-sim", response_model=CreateTurnSimResponse)
