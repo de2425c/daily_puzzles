@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import requests
+import google.auth
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
@@ -42,27 +44,42 @@ class PreflopRangeStorage:
     RFI_POSITIONS = ["UTG", "UTG1", "UTG2", "LJ", "HJ", "CO", "BTN", "SB"]
 
     def __init__(self, credentials_path: str | None = None):
-        """Initialize with Firebase credentials."""
-        if credentials_path is None:
-            credentials_path = str(
-                Path(__file__).parent.parent.parent
-                / "backend"
-                / "stack-24dea-firebase-adminsdk-fbsvc-928dfa73a0.json"
+        """
+        Initialize with Firebase credentials.
+
+        In Cloud Run, uses Application Default Credentials (ADC).
+        Locally, uses service account JSON file.
+        """
+        # Check if running in Cloud Run (K_SERVICE env var is set)
+        if os.getenv("K_SERVICE"):
+            # Use Application Default Credentials in Cloud Run
+            self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "stack-24dea")
+            self.credentials, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/datastore"]
             )
+        else:
+            # Local development - use service account file
+            if credentials_path is None:
+                credentials_path = str(
+                    Path(__file__).parent.parent.parent
+                    / "backend"
+                    / "stack-24dea-firebase-adminsdk-fbsvc-928dfa73a0.json"
+                )
 
-        if not Path(credentials_path).exists():
-            raise FileNotFoundError(f"Firebase credentials not found: {credentials_path}")
+            if not Path(credentials_path).exists():
+                raise FileNotFoundError(f"Firebase credentials not found: {credentials_path}")
 
-        with open(credentials_path) as f:
-            creds_data = json.load(f)
-            self.project_id = creds_data["project_id"]
+            with open(credentials_path) as f:
+                creds_data = json.load(f)
+                self.project_id = creds_data["project_id"]
+
+            self.credentials = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=["https://www.googleapis.com/auth/datastore"]
+            )
 
         self.base_url = (
             f"https://firestore.googleapis.com/v1/projects/{self.project_id}"
             f"/databases/(default)/documents"
-        )
-        self.credentials = service_account.Credentials.from_service_account_file(
-            credentials_path, scopes=["https://www.googleapis.com/auth/datastore"]
         )
         self._refresh_token()
 
