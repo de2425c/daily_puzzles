@@ -1,0 +1,628 @@
+openapi: 3.0.3
+info:
+  title: Deepsolver API
+  version: 1.0.57+test-0281fcab
+  x-logo:
+    backgroundColor: '#ffffff'
+    url: https://deepsolver-static.s3-eu-north-1.amazonaws.com/docs/api.png
+paths:
+  /docs/schema.yml:
+    get:
+      operationId: docs_schema.yml_retrieve
+      description: |-
+        OpenApi3 schema for this API. Format can be selected via content negotiation.
+
+        - YAML: application/vnd.oai.openapi
+        - JSON: application/vnd.oai.openapi+json
+      parameters:
+      - in: query
+        name: format
+        schema:
+          type: string
+          enum:
+          - json
+          - yaml
+      - in: query
+        name: lang
+        schema:
+          type: string
+          enum:
+          - af
+          - ar
+          - ar-dz
+          - ast
+          - az
+          - be
+          - bg
+          - bn
+          - br
+          - bs
+          - ca
+          - cs
+          - cy
+          - da
+          - de
+          - dsb
+          - el
+          - en
+          - en-au
+          - en-gb
+          - eo
+          - es
+          - es-ar
+          - es-co
+          - es-mx
+          - es-ni
+          - es-ve
+          - et
+          - eu
+          - fa
+          - fi
+          - fr
+          - fy
+          - ga
+          - gd
+          - gl
+          - he
+          - hi
+          - hr
+          - hsb
+          - hu
+          - hy
+          - ia
+          - id
+          - ig
+          - io
+          - is
+          - it
+          - ja
+          - ka
+          - kab
+          - kk
+          - km
+          - kn
+          - ko
+          - ky
+          - lb
+          - lt
+          - lv
+          - mk
+          - ml
+          - mn
+          - mr
+          - ms
+          - my
+          - nb
+          - ne
+          - nl
+          - nn
+          - os
+          - pa
+          - pl
+          - pt
+          - pt-br
+          - ro
+          - ru
+          - sk
+          - sl
+          - sq
+          - sr
+          - sr-latn
+          - sv
+          - sw
+          - ta
+          - te
+          - tg
+          - th
+          - tk
+          - tr
+          - tt
+          - udm
+          - uk
+          - ur
+          - uz
+          - vi
+          - zh-hans
+          - zh-hant
+      tags:
+      - docs
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/vnd.oai.openapi:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/yaml:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/vnd.oai.openapi+json:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /task/binary/cfr/result/{task_id}:
+    get:
+      operationId: cfr_results
+      description: Get results of NLH solver calculation.
+      summary: Get result of NLH CFR
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - CFR
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRResult'
+              examples:
+                CfrResults:
+                  externalValue: https://s3.pl-waw.scw.cloud/deepsolver-files-prod/docs/examples/prod/holdem/cfr_results.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWHYZBY2Z0418ZZ5CY4%2F20260112%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260112T225604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=3a34bf7b866286728aae481b715910135092e59ad38813ca83bdc8e63dcc44c6
+                  summary: cfr_results
+                  description: Example response
+          description: OK
+        '404':
+          description: Results missing
+  /task/binary/cfr/result/files/{task_id}:
+    get:
+      operationId: cfr_results_files
+      description: Get results of NLH solver calculation - files.
+      summary: Get result of NLH CFR - files
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - CFR
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRFilesResult'
+              examples:
+                CfrResultsFiles:
+                  externalValue: https://s3.pl-waw.scw.cloud/deepsolver-files-prod/docs/examples/prod/holdem/cfr_results_files.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWHYZBY2Z0418ZZ5CY4%2F20260112%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260112T225604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=36f38c638ebe5260eb64d20700fa4fcd0c6ab419f378bd64cfc122a4299a335c
+                  summary: cfr_results_files
+                  description: Example response
+          description: OK
+        '404':
+          description: Results missing
+  /task/binary/cfr/result/url/{task_id}:
+    get:
+      operationId: cfr_results_url
+      description: Get results of NLH solver calculation - urls.
+      summary: Get result of NLH CFR - URLs
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - CFR
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRURLResult'
+              examples:
+                CfrResultsUrl:
+                  externalValue: https://s3.pl-waw.scw.cloud/deepsolver-files-prod/docs/examples/prod/holdem/cfr_results_url.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWHYZBY2Z0418ZZ5CY4%2F20260112%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260112T225604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=4bd66830ca6ac9111e08d758a0368bbd762b70739a4cecea3a094d5ba7d77a2e
+                  summary: cfr_results_url
+                  description: Example response
+          description: OK
+        '404':
+          description: Results missing
+  /task/binary/cfr/schedule:
+    post:
+      operationId: cfr_schedule
+      description: Schedule a request for NLH solver calculation.
+      summary: Schedule NLH CFR
+      tags:
+      - CFR
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CFRRequest'
+            examples:
+              CfrSchedule:
+                externalValue: https://s3.pl-waw.scw.cloud/deepsolver-files-prod/docs/examples/prod/holdem/cfr_schedule.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWHYZBY2Z0418ZZ5CY4%2F20260112%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260112T225604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=dd95d16b20be41f082914a0cbbcc1098d7a65e3022e7ba91b403c054b61371d8
+                summary: cfr_schedule
+                description: Example request
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CFRRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CFRRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRScheduleResponse'
+          description: OK, task scheduled
+        '400':
+          description: Bad request
+  /task/binary/cfr/schedule_multi:
+    post:
+      operationId: cfr_schedule_multi
+      description: Schedule a request for NLH solver calculations for many boards
+        in bulk.
+      summary: Schedule NLH CFR in bulk
+      tags:
+      - CFR
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CFRMultiRemotePayloadRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CFRMultiRemotePayloadRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CFRMultiRemotePayloadRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRScheduleMultiResponse'
+          description: OK, task scheduled
+        '400':
+          description: Bad request
+  /task/cfr/result/{task_id}:
+    get:
+      operationId: cfr_result_old
+      description: Get results of NLH solver calculation.
+      summary: Get result of NLH CFR
+      parameters:
+      - in: path
+        name: task_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - CFR old
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRResult'
+              examples:
+                CfrResultOld:
+                  externalValue: https://s3.pl-waw.scw.cloud/deepsolver-files-prod/docs/examples/prod/holdem_old/cfr_results.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWHYZBY2Z0418ZZ5CY4%2F20260112%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260112T225604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=f61228218f0341eb0c519a6d0daa41b99d7ba18da7435127e573bf6397f864d1
+                  summary: cfr_result_old
+                  description: Example response
+          description: OK
+        '404':
+          description: Results missing
+  /task/cfr/schedule:
+    post:
+      operationId: cfr_schedule_old
+      description: Schedule a request for NLH solver calculation.
+      summary: Schedule NLH CFR
+      tags:
+      - CFR old
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CFRRequest'
+            examples:
+              CfrScheduleOld:
+                externalValue: https://s3.pl-waw.scw.cloud/deepsolver-files-prod/docs/examples/prod/holdem_old/cfr_schedule.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWHYZBY2Z0418ZZ5CY4%2F20260112%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260112T225604Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=92c642091f79042d503a938612b69fef9ae1434c741e66305f438fb0af8f89a6
+                summary: cfr_schedule_old
+                description: Example request
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CFRRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CFRRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CFRScheduleResponse'
+          description: OK, task scheduled
+        '400':
+          description: Bad request
+components:
+  schemas:
+    CFRFilesResult:
+      type: object
+      properties:
+        results:
+          type: object
+          additionalProperties: {}
+        engine_version:
+          type: string
+          description: Engine version
+        fn_version:
+          type: string
+          description: API version
+      required:
+      - results
+    CFRMultiRemotePayloadRequest:
+      type: object
+      properties:
+        priority:
+          type: integer
+          maximum: 20
+          minimum: 1
+          default: 1
+          description: Calculation priority
+        boards:
+          type: array
+          items:
+            type: string
+        payload_url:
+          type: string
+      required:
+      - boards
+      - payload_url
+    CFROptions:
+      type: object
+      properties:
+        priority:
+          type: integer
+          maximum: 20
+          minimum: 1
+          default: 10
+          description: Calculation priority
+        send_every_nth_second:
+          type: number
+          format: double
+          minimum: 1.0
+          default: 1.0
+        send_every_nth_iter:
+          type: integer
+          minimum: 100
+          default: 100
+        requested_attrs:
+          type: array
+          items: {}
+          default:
+          - strategy
+        requested_nodes:
+          type: array
+          items: {}
+          default:
+          - r:0
+        save_folds:
+          type: boolean
+          default: false
+        save_raw_results:
+          type: boolean
+          default: false
+    CFRRequest:
+      type: object
+      properties:
+        iters:
+          type: integer
+          maximum: 50000
+          minimum: 100
+        tree_request:
+          $ref: '#/components/schemas/TreeBuilder'
+        ranges:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: double
+        board:
+          type: string
+        strategies_per_node_path:
+          type: object
+          additionalProperties: {}
+          default: {}
+        clip_ev:
+          type: boolean
+          default: false
+        add_investments:
+          type: boolean
+          default: true
+        correct_ev_for_node_compare:
+          type: boolean
+          default: false
+        options:
+          $ref: '#/components/schemas/CFROptions'
+      required:
+      - board
+      - iters
+      - options
+      - ranges
+    CFRResult:
+      type: object
+      properties:
+        s3_paths:
+          type: array
+          items:
+            type: string
+        engine_version:
+          type: string
+          description: Engine version
+        fn_version:
+          type: string
+          description: API version
+      required:
+      - s3_paths
+    CFRScheduleMultiResponse:
+      type: object
+      properties:
+        task_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        queue_pos:
+          type: array
+          items:
+            type: integer
+          description: Position in queue
+        queue_eta:
+          type: array
+          items:
+            type: number
+            format: double
+          description: Estimated time to start calculation (in seconds)
+    CFRScheduleResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        queue_pos:
+          type: integer
+          description: Position in queue
+        queue_eta:
+          type: number
+          format: double
+          description: Estimated time to start calculation (in seconds)
+    CFRURLResult:
+      type: object
+      properties:
+        s3_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+        engine_version:
+          type: string
+          description: Engine version
+        fn_version:
+          type: string
+          description: API version
+      required:
+      - s3_urls
+    PokerEnum:
+      enum:
+      - HOLDEM
+      - OMAHA
+      type: string
+      description: |-
+        * `HOLDEM` - HOLDEM
+        * `OMAHA` - OMAHA
+    TreeBuilder:
+      type: object
+      properties:
+        pot_fractions:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items:
+                type: array
+                items:
+                  type: number
+                  format: double
+          nullable: true
+        all_in_threshold:
+          type: number
+          format: double
+        add_all_in_if_stack_lt_pot_times:
+          type: integer
+        pot_size:
+          type: integer
+        players_stacks_sizes:
+          type: array
+          items:
+            type: integer
+          minItems: 2
+        poker:
+          allOf:
+          - $ref: '#/components/schemas/PokerEnum'
+          default: HOLDEM
+        max_all_in_depth:
+          type: integer
+          default: -1
+        donk_pot_fractions:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: double
+          nullable: true
+        street_id:
+          type: integer
+          maximum: 3
+          minimum: 1
+          nullable: true
+          description: Street index, where 0 → preflop, 1 → flop, 2 → turn, 3 → river
+        board:
+          type: string
+          nullable: true
+          maxLength: 10
+          minLength: 6
+        ranges:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: double
+          nullable: true
+        rake:
+          type: array
+          items:
+            type: number
+            format: double
+          nullable: true
+      required:
+      - add_all_in_if_stack_lt_pot_times
+      - all_in_threshold
+      - players_stacks_sizes
+      - pot_fractions
+      - pot_size
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+x-tagGroups:
+- name: Engine
+  tags:
+  - CFR
+  - Treebuilder
+- name: Engine - alternative schema
+  tags:
+  - CFR alternative
+- name: Engine - old schema
+  tags:
+  - CFR old

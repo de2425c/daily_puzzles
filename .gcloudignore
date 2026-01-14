@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Frontend (deployed separately)
+admin-ui/
+
+# Local dev
+*.log
+.DS_Store
+
+# Test files
+tests/
+*_test.py
+test_*.py

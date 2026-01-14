@@ -1,0 +1,162 @@
+Deepsolver API - Practical FAQ
+1) Authentication
+All task endpoints require an application token.
+Header
+Authorization: Token <YOUR_APP_TOKEN>
+2) High-level workflow (how you’re expected to use the API)
+POST schedule (creates a task, returns task_id)
+(Optional but recommended) Receive status notifications via configured callbacks (webhook/pusher)
+GET result using task_id until the result is available
+What “result not ready” looks like
+For the result endpoints, “not ready yet” is represented as:
+HTTP 404 (“Results missing”)
+So 404 is not necessarily an error; it usually just means “still processing / not persisted yet”.
+3) Task priority and queues (how options.priority is actually used)
+options.priority is 1..20, where higher = higher priority.
+Priority affects scheduling order within the backend queue.
+The schedule response may include:
+queue_pos: your approximate position (can be null)
+queue_eta: estimated time to start (seconds; can be null)
+These are best-effort estimates and may be absent.
+4) ranges: hand order, size, and interpretation
+Required shape
+ranges is a list of per-player vectors:
+for heads-up Hold’em: ranges is 2 × 1326
+Hand ordering
+The 1326 entries are in the solver’s canonical combo order (fixed and not re-ordered by the API).
+If the client uses a different ordering internally, they must map it themselves (common approach: ship an order file + mapping in the SDK).
+Value meaning
+Entries are weights:
+can be probabilities (sum to ~1) or arbitrary nonnegative weights
+the engine normalizes internally
+5) tree_request semantics (beyond types)
+5.1 pot_fractions (the “sizings” field)
+This does not encode “exact paths”. It defines the allowed bet/raise sizes (as pot fractions) that the tree builder will apply wherever relevant.
+Internally, the pot fraction structure is interpreted as:
+Players: ["IP", "OOP"] in list form
+pot_fractions[0] → IP
+pot_fractions[1] → OOP
+Streets (from the starting street_id): ["preflop", "flop", "turn", "river"]
+Betting round buckets: ["bet", "raise", "3bet", "4+bet"]
+Each bucket is a list of floats > 0 (pot fractions) or special "…x" strings (engine-side feature).
+So conceptually:
+pot_fractions[player][street][betting_round] = [0.33, 0.75, 1.25, ...]
+Key gotcha: “check” is not a sizing. Sizes must be > 0.
+Example mapping (decision point)
+If you want BTN (IP) to have flop c-bet options after BB checks:
+those sizes come from IP / flop / bet bucket
+i.e., pot_fractions[IP][flop]["bet"].
+You do not specify “BB checks” explicitly; checks/calls/folds exist as legal actions and are included automatically by the tree builder.
+5.2 all_in_threshold
+A pot-multiple cutoff used by the builder to decide when a size should collapse into “all-in”.
+Intuition:
+prevents having both “bet 400% pot” and “all-in” as separate actions when they’re effectively the same.
+5.3 add_all_in_if_stack_lt_pot_times
+Auto-adds an all-in option when stacks are short relative to pot.
+Rule of thumb:
+when remaining stack is below a configured multiple of the pot, the tree builder includes an all-in action even if your sizings don’t explicitly reach it.
+5.4 max_all_in_depth
+Caps how deep all-in re-raises can go (tree size control).
+default -1 typically means “no explicit cap” (engine interprets special values internally)
+5.5 donk_pot_fractions
+Separate pot-fractions for donk leads (OOP betting into IP at the start of a street before IP has checked).
+Used only at donk nodes.
+Same “sizes must be > 0” rule.
+5.6 Why board and ranges exist both at root and in tree_request
+Two subsystems can use them:
+Root-level board/ranges are for the solver request.
+tree_request.board/tree_request.ranges are accepted by the tree builder schema (and may be filled/aliased internally).
+Practically: provide them at root; tree_request may omit them unless your integration uses builder-only inputs.
+6) Partial results, progress, and callbacks
+Two CFROptions fields exist specifically for streaming partial node outputs:
+send_every_nth_second
+send_every_nth_iter
+These don’t change the final result format; they control how often the worker emits “partial_result” notifications containing requested node payloads.
+To actually receive these:
+your Application must have callbacks configured (webhook or pusher)
+notifications include:
+task status changes (pending/running/finished/failed)
+partial results for requested nodes/attrs
+If a client only polls /result/... and never subscribes to status events, failures can look like “endless 404”.
+7) Result endpoints (what you get back and how to use it)
+There are multiple “result” shapes:
+/task/binary/cfr/result/{task_id} → returns object storage paths (s3_paths)
+Use when you want to fetch artifacts yourself (batch, caching, etc.)
+/task/binary/cfr/result/url/{task_id} → returns pre-signed URLs (s3_urls)
+Use when you want direct download links without signing yourself.
+/task/binary/cfr/result/files/{task_id} → returns results inlined as JSON (results)
+Use when you want the parsed payload directly in the API response.
+Which one is “best” depends on payload size and client architecture.
+8) The solver result payload shape (what you actually get back)
+The solver result payload is:
+{
+  "tree": { ... },
+  "stats": { ... },
+  "config": { ... }
+}
+stats
+Fields:
+engine_version, time_taken, tree_size, convergence, iters, nash_distance
+config
+Fields:
+board, tree_name, rake, poker
+plus request options like requested_attrs, requested_nodes, send_every_nth_iter, etc.
+9) The tree object: what fields mean
+The JSON tree is produced by exporting node objects. Key points:
+Per-node fields
+id: node label (root is "r:0", others are derived from action taken)
+_pio_path: stable node path (colon-joined ids)
+street_id
+pot_size
+players_stacks_sizes
+nr_of_players, dealer_id
+players_last_actions: per-player last action tuple [code, amount]
+bets: per-player committed bet amount (this is what changes as actions happen)
+data: solver outputs (see below)
+Decision nodes only (nodes where someone acts)
+player_id: acting player index
+actions: list of [code, amount]
+betting_round_depth
+children: parallel to actions (children[i] is the result of actions[i])
+Action encoding gotchas (important for client parsing)
+Child node id is derived from the action taken, but it is normalized:
+call/check → "c"
+fold → "f"
+bet and all-in → "b<amount>"
+(all-in becomes “b…” too; the original "A" code is preserved only in the parent’s actions list)
+So: do not try to infer “all-in vs bet” from child id. Always use actions[i][0] from the parent.
+Also: action numeric values represent “bet-to” amounts used to set bets[player_id] (not deltas).
+pot_size vs bets
+pot_size is constant across all nodes
+the evolving commitment is tracked via bets and players_last_actions
+So developers should treat:
+pot_size = base pot context for the tree/street
+bets = how much each player has put in at that node
+10) data (NodeData): shapes and when fields are null
+strategy: shape (A, 1326) where A=len(actions)
+Probability of each action for each hand.
+EV: shape (P, 1326) where P=#players
+merged_EV: shape (P,) (no hand axis)
+Combo axis order is the same 1326 canonical order as ranges.
+11) Tiny annotated example
+_pio_path: r:0:c:b1999800
+bets: [1999800, 0]
+players_last_actions: [['B', 1999800], ['C', 0]]
+Meaning:
+root action was "C" (check/call) then a bet-to of 1,999,800
+pot context stayed the same (pot_size unchanged)
+committed bet state is tracked in bets
+12) Common pitfalls / “why doesn’t this work?”
+Wrong combo order → strategies/EV look scrambled. Fix by aligning to the solver’s 1326 ordering.
+Putting 0 in pot fractions → invalid. Sizes must be > 0 (check is not a bet sizing).
+Polling forever on 404 → likely means task failed or was never persisted; consume task status notifications and/or add a client timeout.
+Too-large inlined results → prefer URL or paths endpoints for production clients.
+13) Helpful files
+
+Canonical hand order: solver_hand_order.txt
+
+Example request (flop): deepsolver-request-flop.json
+Example response (flop): flop-response.json
+
+Example request (turn): deepsolver-request-turn.json
+Example response (turn): turn-response.json

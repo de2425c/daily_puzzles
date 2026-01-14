@@ -1,0 +1,398 @@
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import api from '../api'
+
+const router = useRouter()
+const loading = ref(true)
+const error = ref(null)
+const workflowStatus = ref({ dates: [] })
+
+// Selected date and its puzzles
+const selectedDate = ref(null)
+const selectedPuzzles = ref([])
+const loadingPuzzles = ref(false)
+
+onMounted(async () => {
+  try {
+    workflowStatus.value = await api.getWorkflowStatus(14)
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    loading.value = false
+  }
+})
+
+function formatDate(dateStr) {
+  const date = new Date(dateStr + 'T00:00:00')
+  const options = { weekday: 'short', month: 'short', day: 'numeric' }
+  return date.toLocaleDateString('en-US', options)
+}
+
+function formatFullDate(dateStr) {
+  const date = new Date(dateStr + 'T00:00:00')
+  const options = { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }
+  return date.toLocaleDateString('en-US', options)
+}
+
+function getStatusClass(count, target) {
+  if (count >= target) return 'complete'
+  if (count > 0) return 'partial'
+  return 'empty'
+}
+
+async function selectDate(dateStr) {
+  if (selectedDate.value === dateStr) {
+    // Toggle off if clicking same date
+    selectedDate.value = null
+    selectedPuzzles.value = []
+    return
+  }
+
+  selectedDate.value = dateStr
+  loadingPuzzles.value = true
+
+  try {
+    selectedPuzzles.value = await api.getPuzzlesForDate(dateStr)
+  } catch (e) {
+    error.value = e.message
+    selectedPuzzles.value = []
+  } finally {
+    loadingPuzzles.value = false
+  }
+}
+
+function goToSims() {
+  router.push('/sims')
+}
+</script>
+
+<template>
+  <div class="home">
+    <h1>Puzzle Workflow</h1>
+
+    <div v-if="loading" class="loading">Loading...</div>
+    <div v-else-if="error" class="error">{{ error }}</div>
+    <template v-else>
+      <div class="workflow-section">
+        <h2>Daily Puzzle Schedule</h2>
+        <p class="subtitle">Click a day to view scheduled puzzles</p>
+
+        <div class="date-grid">
+          <div
+            v-for="item in workflowStatus.dates"
+            :key="item.date"
+            class="date-card"
+            :class="[getStatusClass(item.count, item.target), { selected: selectedDate === item.date }]"
+            @click="selectDate(item.date)"
+          >
+            <div class="date-label">{{ formatDate(item.date) }}</div>
+            <div class="count-display">
+              <span class="count">{{ item.count }}</span>
+              <span class="separator">/</span>
+              <span class="target">{{ item.target }}</span>
+            </div>
+            <div class="progress-bar">
+              <div
+                class="progress-fill"
+                :style="{ width: `${Math.min(100, (item.count / item.target) * 100)}%` }"
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Selected Date Puzzles -->
+        <div v-if="selectedDate" class="puzzles-panel">
+          <h3>{{ formatFullDate(selectedDate) }}</h3>
+
+          <div v-if="loadingPuzzles" class="loading">Loading puzzles...</div>
+          <div v-else-if="selectedPuzzles.length === 0" class="empty-puzzles">
+            No puzzles scheduled for this day yet.
+          </div>
+          <div v-else class="puzzle-list">
+            <div v-for="puzzle in selectedPuzzles" :key="puzzle.id" class="puzzle-item">
+              <div class="puzzle-title">{{ puzzle.title }}</div>
+              <div class="puzzle-meta">
+                <span class="tag">{{ puzzle.hero }}</span>
+                <span class="tag">{{ puzzle.street }}</span>
+                <span class="tag difficulty" :class="`diff-${puzzle.difficulty}`">
+                  {{ puzzle.difficulty === 1 ? 'Easy' : puzzle.difficulty === 2 ? 'Medium' : 'Hard' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions-section">
+        <h2>Quick Actions</h2>
+        <div class="action-cards">
+          <div class="action-card" @click="goToSims">
+            <div class="action-icon">&#9881;</div>
+            <div class="action-title">Sim Library</div>
+            <div class="action-desc">Browse sims and generate spots</div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.home {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 24px;
+  margin-bottom: 24px;
+}
+
+h2 {
+  font-size: 18px;
+  margin: 0 0 8px 0;
+}
+
+.subtitle {
+  color: #666;
+  font-size: 14px;
+  margin: 0 0 16px 0;
+}
+
+.workflow-section {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  margin-bottom: 24px;
+}
+
+.date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 12px;
+}
+
+.date-card {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.date-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.date-card.selected {
+  border-color: #1976d2 !important;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2);
+}
+
+.date-card.complete {
+  background: #d4edda;
+  border-color: #28a745;
+}
+
+.date-card.partial {
+  background: #fff3cd;
+  border-color: #ffc107;
+}
+
+.date-card.empty {
+  background: #f8f9fa;
+  border-color: #dee2e6;
+}
+
+.date-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.count-display {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.count {
+  color: #333;
+}
+
+.separator {
+  color: #999;
+  margin: 0 2px;
+}
+
+.target {
+  color: #999;
+}
+
+.progress-bar {
+  height: 4px;
+  background: #e9ecef;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #28a745;
+  transition: width 0.3s ease;
+}
+
+.date-card.partial .progress-fill {
+  background: #ffc107;
+}
+
+.date-card.empty .progress-fill {
+  background: #dee2e6;
+}
+
+/* Puzzles Panel */
+.puzzles-panel {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #eee;
+}
+
+.puzzles-panel h3 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  color: #333;
+}
+
+.empty-puzzles {
+  color: #666;
+  font-size: 14px;
+  padding: 20px;
+  text-align: center;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.puzzle-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.puzzle-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f8f9fa;
+  border-radius: 6px;
+}
+
+.puzzle-title {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.puzzle-meta {
+  display: flex;
+  gap: 6px;
+}
+
+.tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: #e9ecef;
+  border-radius: 4px;
+  color: #666;
+}
+
+.tag.difficulty {
+  font-weight: 600;
+}
+
+.tag.diff-1 {
+  background: #d4edda;
+  color: #155724;
+}
+
+.tag.diff-2 {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.tag.diff-3 {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+/* Actions */
+.actions-section {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.action-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.action-card {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.action-card:hover {
+  background: #e9ecef;
+  border-color: #1976d2;
+}
+
+.action-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+
+.action-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.action-desc {
+  font-size: 13px;
+  color: #666;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .date-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .date-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .action-cards {
+    grid-template-columns: 1fr;
+  }
+  .puzzle-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+</style>
