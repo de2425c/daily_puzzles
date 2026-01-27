@@ -12,9 +12,23 @@ from .tree_parser import (
     get_strategy_for_combo,
     get_ev_by_action,
     find_decision_nodes,
+    get_node_by_path,
     UNITS_PER_BB,
 )
 from .hand_utils import HAND_ORDER, is_combo_blocked, RANK_ORDER
+
+
+def get_actual_pot(node: TreeNode) -> int:
+    """
+    Calculate actual pot size at a node.
+
+    The solver stores pot_size as the starting pot, but tracks
+    betting in the bets array. Actual pot = pot_size + sum(bets).
+    """
+    actual_pot = node.pot_size
+    if node.bets:
+        actual_pot += sum(node.bets)
+    return actual_pot
 
 
 @dataclass
@@ -361,6 +375,7 @@ def _build_street_actions(
     board: str,
     ip_position: str,
     oop_position: str,
+    previous_street_actions: list[dict] | None = None,
 ) -> list[dict]:
     """
     Build a street-by-street breakdown of actions from root to target node.
@@ -371,6 +386,7 @@ def _build_street_actions(
         board: Full board string
         ip_position: IP player name
         oop_position: OOP player name
+        previous_street_actions: Actions from previous streets (for turn/river sims)
 
     Returns:
         List of street action dicts like:
@@ -384,12 +400,17 @@ def _build_street_actions(
     result = []
     street_names = {1: "flop", 2: "turn", 3: "river"}
 
-    # Always include preflop context
-    result.append({
-        "street": "preflop",
-        "cards": "",
-        "actions": f"{ip_position} raises 2.5bb, {oop_position} calls",
-    })
+    # Start with preflop and any previous street actions
+    if previous_street_actions:
+        # Use provided previous actions (includes preflop and prior streets)
+        result.extend(previous_street_actions)
+    else:
+        # Default preflop context for flop sims
+        result.append({
+            "street": "preflop",
+            "cards": "",
+            "actions": f"{ip_position} raises 2.5bb, {oop_position} calls",
+        })
 
     # Parse path to get actions
     parts = target_path.split(":")
@@ -717,7 +738,7 @@ def extract_random_spot_same_street(
             hero_position=hero_position,
             villain_position=villain_position,
             street=_street_name(node.street_id),
-            pot_size_bb=node.pot_size / UNITS_PER_BB,
+            pot_size_bb=get_actual_pot(node) / UNITS_PER_BB,
             stack_size_bb=stack_size_bb,
             action_sequence=action_seq,
             tree_path=node.path,
@@ -888,7 +909,7 @@ def extract_random_river_spot(
             hero_position=hero_position,
             villain_position=villain_position,
             street=_street_name(node.street_id),
-            pot_size_bb=node.pot_size / UNITS_PER_BB,
+            pot_size_bb=get_actual_pot(node) / UNITS_PER_BB,
             stack_size_bb=stack_size_bb,
             action_sequence=action_seq,
             tree_path=node.path,
@@ -1048,7 +1069,7 @@ class SpotExtractor:
                         hero_position=hero_position,
                         villain_position=villain_position,
                         street=_street_name(node.street_id),
-                        pot_size_bb=node.pot_size / UNITS_PER_BB,
+                        pot_size_bb=get_actual_pot(node) / UNITS_PER_BB,
                         stack_size_bb=stack_size_bb,
                         action_sequence=action_seq,
                         tree_path=node.path,
@@ -1064,3 +1085,118 @@ class SpotExtractor:
                     spots.append(spot)
 
         return spots
+
+
+def create_spot_at_path(
+    tree: TreeNode,
+    path: str,
+    combo: str,
+    board: str,
+    ip_position: str,
+    oop_position: str,
+    task_id: str = "",
+    stack_size_bb: float = 100.0,
+    previous_street_actions: list[dict] | None = None,
+) -> SpotCandidate | None:
+    """
+    Create a spot at a specific tree path for a specific combo.
+
+    This allows creating a spot at any decision point in the tree,
+    regardless of whether it meets the "interesting spot" criteria.
+
+    Args:
+        tree: Parsed tree root
+        path: Tree path like "r:0:c:b1650000"
+        combo: Hero's combo like "AhKs"
+        board: Board string
+        ip_position: IP player position name
+        oop_position: OOP player position name
+        task_id: Source task ID for tracking
+        stack_size_bb: Effective stack in big blinds
+        previous_street_actions: Actions from previous streets (for turn/river sims)
+            e.g., [{"street": "flop", "cards": "Ah-Kh-Tc", "actions": "BB checks, LJ bets 1.6bb, BB calls"}]
+
+    Returns:
+        SpotCandidate or None if path/combo is invalid
+    """
+    # Navigate to the node
+    node = get_node_by_path(tree, path)
+    if node is None:
+        return None
+
+    # Check if this is a decision node (not terminal)
+    if node.is_terminal():
+        return None
+
+    # Check if combo is valid and not blocked
+    if is_combo_blocked(combo, board):
+        return None
+
+    try:
+        combo_idx = HAND_ORDER.index(combo)
+    except ValueError:
+        return None
+
+    # Check if combo is in range for the player to act
+    if node.ranges is None:
+        return None
+
+    player_range = node.ranges[node.player_id]
+    if player_range[combo_idx] <= 0:
+        return None
+
+    # Get strategy for this combo
+    strategy = get_strategy_for_combo(node, combo_idx)
+    if not strategy:
+        return None
+
+    # Find the "correct" action (highest frequency)
+    sorted_actions = sorted(strategy.items(), key=lambda x: x[1], reverse=True)
+    best_action, best_freq = sorted_actions[0]
+
+    # Get EVs
+    ev_by_action = get_ev_by_action(node, node.player_id, combo_idx)
+
+    # Determine hero/villain positions
+    hero_position = oop_position if node.player_id == 1 else ip_position
+    villain_position = ip_position if node.player_id == 1 else oop_position
+
+    # Build action sequence
+    action_seq = _build_action_sequence(
+        node.path,
+        tree.pot_size,
+        ip_position,
+        oop_position,
+    )
+
+    # Build street actions
+    street_actions = _build_street_actions(
+        tree,
+        node.path,
+        board,
+        ip_position,
+        oop_position,
+        previous_street_actions=previous_street_actions,
+    )
+
+    return SpotCandidate(
+        id=str(uuid4()),
+        source_task_id=task_id,
+        board=board,
+        hero_combo=combo,
+        hero_position=hero_position,
+        villain_position=villain_position,
+        street=_street_name(node.street_id),
+        pot_size_bb=get_actual_pot(node) / UNITS_PER_BB,
+        stack_size_bb=stack_size_bb,
+        action_sequence=action_seq,
+        tree_path=node.path,
+        available_actions=list(strategy.keys()),
+        action_frequencies=strategy,
+        correct_action=best_action,
+        correct_frequency=best_freq,
+        ev_by_action=ev_by_action,
+        hand_category=categorize_hand(combo, board),
+        board_texture=categorize_board(board),
+        street_actions=street_actions,
+    )

@@ -42,3 +42,4 @@ htmlcov/
 # Large response files (keep samples but ignore bulk data)
 *-response*.json
 !flop-response*.json
+.vercel

@@ -114,11 +114,17 @@ function goBack() {
       <!-- Actions -->
       <div class="action-buttons">
         <button
-          class="primary generate-btn"
+          class="primary browse-btn"
+          @click="router.push(`/sims/${sim.id}/browse`)"
+        >
+          Browse Tree
+        </button>
+        <button
+          class="secondary generate-btn"
           @click="generateRandomSpot"
           :disabled="generating"
         >
-          {{ generating ? 'Generating...' : 'Generate Random Spot' }}
+          {{ generating ? 'Generating...' : 'Random Spot' }}
         </button>
         <button
           v-if="sim.street === 'flop'"
@@ -224,9 +230,13 @@ h3 {
   margin-top: 20px;
 }
 
-.generate-btn {
+.browse-btn {
   padding: 16px 32px;
   font-size: 16px;
+}
+
+.generate-btn {
+  padding: 12px 24px;
 }
 
 .action-buttons button {

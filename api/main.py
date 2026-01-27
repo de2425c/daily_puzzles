@@ -4,8 +4,13 @@ import os
 import sys
 import random
 import uuid
+import logging
 from datetime import datetime
 from pathlib import Path
+
+# Configure logging to flush immediately
+logging.basicConfig(level=logging.INFO, format='%(message)s', stream=sys.stdout)
+logger = logging.getLogger(__name__)
 
 # Add parent directory for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -22,6 +27,7 @@ from api.schemas import (
     SimResponse,
     RandomSpotRequest,
     RandomSpotResponse,
+    CreateSpotAtPathRequest,
     ActionOption,
     TreeActionsResponse,
     TreeRangesResponse,
@@ -32,13 +38,27 @@ from api.schemas import (
     DatePuzzleCount,
     WorkflowStatusResponse,
     ScheduledPuzzleResponse,
+    FullScheduledPuzzleResponse,
+    UpdatePuzzleRequest,
     PreflopChildNode,
     PreflopNodeResponse,
     PreflopScenarioSummary,
     PreflopSimRequest,
+    PremiumPuzzleData,
+    # Day Plan schemas
+    PuzzleSlotResponse,
+    PreflopConfigResponse,
+    DayPlanResponse,
+    CreateDayPlanRequest,
+    SetPreflopConfigRequest,
+    CreateSlotSimRequest,
+    LinkSlotSimRequest,
+    UpdateSlotRequest,
+    CreateChildSlotSimRequest,
+    CompatibleSimResponse,
 )
 from storage.firestore import PuzzleStorage
-from storage.models import spot_to_puzzle, ApprovedPuzzle, SolverSim, ScheduledPuzzle
+from storage.models import spot_to_puzzle, ApprovedPuzzle, SolverSim, ScheduledPuzzle, DayPlan, PreflopConfig, PuzzleSlot
 from deepsolver import (
     DeepsolverClient,
     get_api_token,
@@ -189,7 +209,7 @@ def approve_spot(spot_id: str, request: ApproveRequest):
     temp_puzzle = spot_to_puzzle(
         spot=spot,
         puzzle_id=0,  # Not used
-        title=request.title,
+        title="",  # Deprecated
         explanation="",  # Not used - we have per-action explanations
         difficulty=request.difficulty,
         answer_options=request.answer_options,
@@ -199,7 +219,6 @@ def approve_spot(spot_id: str, request: ApproveRequest):
     puzzle = ScheduledPuzzle(
         id=str(uuid.uuid4()),
         scheduled_date=request.scheduled_date,
-        title=request.title,
         question_text=request.question_text,
         structure="6max",
         effective_stacks=int(spot.stack_size_bb),
@@ -209,6 +228,8 @@ def approve_spot(spot_id: str, request: ApproveRequest):
         answer_options=request.answer_options,
         correct_answers=request.correct_answers,
         explanations=request.explanations,
+        ev_by_action=spot.ev_by_action,
+        action_frequencies=spot.action_frequencies,
         difficulty=request.difficulty,
         tags=request.tags,
         created_at=datetime.utcnow(),
@@ -223,7 +244,6 @@ def approve_spot(spot_id: str, request: ApproveRequest):
     return ScheduledPuzzleResponse(
         id=puzzle.id,
         scheduled_date=puzzle.scheduled_date,
-        title=puzzle.title,
         question_text=puzzle.question_text,
         hero=puzzle.hero,
         correct_answer=request.correct_answers[0] if request.correct_answers else "",
@@ -294,6 +314,405 @@ def get_puzzle(puzzle_id: int):
         difficulty=puzzle.difficulty,
         tags=puzzle.tags,
     )
+
+
+# =============================================================================
+# Premium Data (iOS)
+# =============================================================================
+
+
+@app.get("/daily-puzzles/{puzzle_id}/premium", response_model=PremiumPuzzleData)
+def get_premium_puzzle_data(puzzle_id: str):
+    """
+    Get premium analysis data for a scheduled puzzle.
+
+    Returns explanations, EVs, frequencies, and range grids.
+    iOS app calls this when user has premium subscription.
+    """
+    # Get the puzzle from new_daily_puzzles
+    puzzle = storage.get_scheduled_puzzle(puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    # Extract board from Action data
+    board = _extract_board_from_action(puzzle.action)
+    if not board:
+        # Return data without range grids
+        return PremiumPuzzleData(
+            puzzle_id=puzzle_id,
+            explanations=puzzle.explanations,
+            ev_by_action=puzzle.ev_by_action,
+            action_frequencies=puzzle.action_frequencies,
+            hero_range_grid=None,
+            villain_range_grid=None,
+        )
+
+    # Find sim by matching board and positions
+    villain = _extract_villain_from_action(puzzle.action, puzzle.hero)
+    logger.info(f"PREMIUM: puzzle={puzzle_id}, board={board}, hero={puzzle.hero}, villain={villain}")
+    sys.stdout.flush()
+    sim = _find_sim_by_board(board, puzzle.hero, villain)
+    if not sim:
+        logger.info(f"PREMIUM: No sim found for board={board}")
+        sys.stdout.flush()
+        # Return data without range grids
+        return PremiumPuzzleData(
+            puzzle_id=puzzle_id,
+            explanations=puzzle.explanations,
+            ev_by_action=puzzle.ev_by_action,
+            action_frequencies=puzzle.action_frequencies,
+            hero_range_grid=None,
+            villain_range_grid=None,
+        )
+
+    logger.info(f"PREMIUM: Found sim={sim.id}, scenario={sim.scenario}, ip={sim.ip_position}, oop={sim.oop_position}, has_tree={sim.tree is not None}")
+    sys.stdout.flush()
+
+    # Reconstruct tree path from action sequence
+    tree_path = _reconstruct_tree_path(puzzle.action, sim)
+    logger.info(f"PREMIUM: tree_path={tree_path}")
+    sys.stdout.flush()
+
+    # Get range data
+    hero_grid, villain_grid = _get_range_grids(sim, tree_path, puzzle.hero)
+
+    return PremiumPuzzleData(
+        puzzle_id=puzzle_id,
+        explanations=puzzle.explanations,
+        ev_by_action=puzzle.ev_by_action,
+        action_frequencies=puzzle.action_frequencies,
+        hero_range_grid=hero_grid,
+        villain_range_grid=villain_grid,
+    )
+
+
+def _extract_board_from_action(action: dict) -> str | None:
+    """Extract full board cards from Action dict (flop + turn + river)."""
+    board = ""
+
+    # Get flop cards
+    flop = action.get("flop", {})
+    flop_cards = flop.get("Cards", "")
+    if flop_cards:
+        board = flop_cards.replace("-", "")
+    else:
+        # Try to find Cards in any position entry in flop
+        for key, value in flop.items():
+            if isinstance(value, dict) and "Cards" in value:
+                cards = value.get("Cards", "")
+                if len(cards) >= 6:  # Looks like a board
+                    board = cards.replace("-", "")
+                    break
+
+    if not board:
+        return None
+
+    # Add turn card if present
+    turn = action.get("turn", {})
+    turn_card = turn.get("Cards", "")
+    if turn_card:
+        board += turn_card.replace("-", "")
+
+    # Add river card if present
+    river = action.get("river", {})
+    river_card = river.get("Cards", "")
+    if river_card:
+        board += river_card.replace("-", "")
+
+    return board
+
+
+def _extract_villain_from_action(action: dict, hero: str) -> str | None:
+    """Extract villain position from preflop action."""
+    VALID_POSITIONS = {"UTG", "UTG1", "UTG2", "HJ", "LJ", "CO", "BTN", "SB", "BB"}
+    preflop = action.get("preflop", {})
+    for position in preflop.keys():
+        if position != hero and position in VALID_POSITIONS:
+            return position
+    return None
+
+
+def _find_sim_by_board(board: str, hero_position: str = None, villain_position: str = None) -> SolverSim | None:
+    """Find a sim matching the given board and positions."""
+    all_sims = storage.get_all_sims()
+    matching_sims = [s for s in all_sims if s.board == board]
+
+    if not matching_sims:
+        return None
+
+    # If both positions provided, find exact match
+    if hero_position and villain_position and len(matching_sims) > 1:
+        for sim in matching_sims:
+            positions = {sim.ip_position, sim.oop_position}
+            if hero_position in positions and villain_position in positions:
+                return storage.get_sim(sim.id, load_tree=True)
+
+    # If only hero position provided, try to find matching sim
+    if hero_position and len(matching_sims) > 1:
+        for sim in matching_sims:
+            if sim.ip_position == hero_position or sim.oop_position == hero_position:
+                return storage.get_sim(sim.id, load_tree=True)
+
+    # Fallback to first match
+    return storage.get_sim(matching_sims[0].id, load_tree=True)
+
+
+def _reconstruct_tree_path(action: dict, sim: SolverSim) -> str:
+    """
+    Reconstruct tree path from action sequence by navigating the actual tree.
+
+    Uses fuzzy matching for bet sizes since puzzle amounts may differ slightly
+    from solver's exact bet sizes.
+    """
+    from deepsolver.tree_parser import parse_tree, get_node_by_path
+
+    # Determine which street's actions to use based on sim
+    street = sim.street if sim.street else "flop"
+    street_data = action.get(street, {})
+
+    # Parse the tree
+    if not sim.tree:
+        logger.info("TREEPATH: No tree in sim")
+        return "r:0"
+    tree = parse_tree(sim.tree)
+
+    # Start with root
+    current_path = "r:0"
+
+    # Get the action sequence from the appropriate street
+    position_actions = []
+    for key, value in sorted(street_data.items()):
+        if isinstance(value, dict) and "Action" in value:
+            position_actions.append((key, value))
+
+    for pos_key, action_data in position_actions:
+        action_type = action_data.get("Action", "").lower()
+        amount = action_data.get("Amount")
+
+        # Get current node to find available children
+        current_node = get_node_by_path(tree, current_path)
+        if not current_node or not current_node.children:
+            break
+
+        # Find the best matching child
+        if action_type == "check" or action_type == "call":
+            # Look for check child (path ends with :c)
+            for child in current_node.children:
+                if child.path.endswith(":c"):
+                    current_path = child.path
+                    break
+        elif action_type in ("bet", "raise", "3bet", "4bet", "5bet"):
+            if amount:
+                # Find the closest bet size
+                target_units = int(amount * 1_000_000)
+                best_child = None
+                best_diff = float("inf")
+
+                for child in current_node.children:
+                    # Extract bet amount from path like "r:0:b1600000"
+                    path_parts = child.path.split(":")
+                    last_part = path_parts[-1]
+                    if last_part.startswith("b"):
+                        try:
+                            bet_units = int(last_part[1:])
+                            diff = abs(bet_units - target_units)
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_child = child
+                        except ValueError:
+                            pass
+
+                if best_child:
+                    current_path = best_child.path
+        elif action_type == "fold":
+            # Look for fold child
+            for child in current_node.children:
+                if child.path.endswith(":f"):
+                    current_path = child.path
+                    break
+
+    return current_path
+
+
+def _get_range_grids(
+    sim: SolverSim,
+    tree_path: str,
+    hero_position: str
+) -> tuple[dict | None, dict[str, float] | None]:
+    """Get 13x13 range grids for hero (with actions) and villain (weights only)."""
+    if not sim.tree:
+        return None, None
+
+    try:
+        tree = parse_tree(sim.tree)
+        range_data = get_ranges_at_node(tree, tree_path)
+
+        if "error" in range_data:
+            return None, None
+
+        ip_range = range_data.get("ip_range")
+        oop_range = range_data.get("oop_range")
+        strategy = range_data.get("strategy")  # shape: (num_actions, 1326)
+        action_names = range_data.get("action_names")  # list of action names
+
+        if not ip_range or not oop_range:
+            return None, None
+
+        # Determine which range is hero's based on sim's actual position assignments
+        hero_is_ip = hero_position == sim.ip_position
+        logger.info(f"RANGES: hero={hero_position}, sim.ip={sim.ip_position}, sim.oop={sim.oop_position}, hero_is_ip={hero_is_ip}")
+        sys.stdout.flush()
+        hero_range = ip_range if hero_is_ip else oop_range
+        villain_range = oop_range if hero_is_ip else ip_range
+
+        # Aggregate hero grid with strategy (actions)
+        hero_grid = _aggregate_to_grid_with_actions(hero_range, strategy, action_names)
+        # Villain just gets weights
+        villain_grid = _aggregate_to_grid(villain_range)
+
+        return hero_grid, villain_grid
+    except Exception as e:
+        print(f"Error getting range grids: {e}")
+        return None, None
+
+
+def _aggregate_to_grid(range_1326: list[int | float]) -> dict[str, float]:
+    """
+    Aggregate 1326 combo weights to 13x13 grid format.
+
+    Returns dict like {"AA": 1.0, "AKs": 0.95, "AKo": 0.85, ...}
+    """
+    from deepsolver.hand_utils import HAND_ORDER
+
+    RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2']
+
+    # Initialize grid with totals and counts
+    grid_totals = {}
+    grid_counts = {}
+
+    for combo_idx, weight in enumerate(range_1326):
+        if combo_idx >= len(HAND_ORDER):
+            break
+
+        combo = HAND_ORDER[combo_idx]
+        r1, s1 = combo[0], combo[1]
+        r2, s2 = combo[2], combo[3]
+
+        # Determine hand type
+        if r1 == r2:
+            # Pair
+            hand_key = f"{r1}{r1}"
+        elif s1 == s2:
+            # Suited - higher rank first
+            ranks = sorted([r1, r2], key=lambda x: RANKS.index(x))
+            hand_key = f"{ranks[0]}{ranks[1]}s"
+        else:
+            # Offsuit - higher rank first
+            ranks = sorted([r1, r2], key=lambda x: RANKS.index(x))
+            hand_key = f"{ranks[0]}{ranks[1]}o"
+
+        if hand_key not in grid_totals:
+            grid_totals[hand_key] = 0.0
+            grid_counts[hand_key] = 0
+
+        grid_totals[hand_key] += weight
+        grid_counts[hand_key] += 1
+
+    # Calculate averages and normalize (solver uses 0-10000 scale, we want 0-1)
+    grid = {}
+    for hand_key in grid_totals:
+        if grid_counts[hand_key] > 0:
+            avg = grid_totals[hand_key] / grid_counts[hand_key]
+            normalized = avg / 10000.0  # Convert to 0-1 scale
+            if normalized > 0.001:  # Only include non-zero
+                grid[hand_key] = round(normalized, 3)
+
+    return grid
+
+
+def _aggregate_to_grid_with_actions(
+    range_1326: list[int | float],
+    strategy: list[list[float]] | None,
+    action_names: list[str] | None
+) -> dict[str, dict]:
+    """
+    Aggregate 1326 combo weights to 13x13 grid format with action frequencies.
+
+    Returns dict like:
+    {
+        "AA": {"weight": 1.0, "actions": {"Bet 1.6bb": 0.85, "Check": 0.15}},
+        "AKs": {"weight": 0.95, "actions": {"Bet 1.6bb": 1.0}},
+        ...
+    }
+    """
+    from deepsolver.hand_utils import HAND_ORDER
+
+    RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2']
+
+    # Initialize grid with totals and counts
+    grid_totals = {}  # hand_key -> total weight
+    grid_counts = {}  # hand_key -> count of combos
+    grid_actions = {}  # hand_key -> {action_name -> total frequency}
+
+    for combo_idx, weight in enumerate(range_1326):
+        if combo_idx >= len(HAND_ORDER):
+            break
+
+        combo = HAND_ORDER[combo_idx]
+        r1, s1 = combo[0], combo[1]
+        r2, s2 = combo[2], combo[3]
+
+        # Determine hand type
+        if r1 == r2:
+            hand_key = f"{r1}{r1}"
+        elif s1 == s2:
+            ranks = sorted([r1, r2], key=lambda x: RANKS.index(x))
+            hand_key = f"{ranks[0]}{ranks[1]}s"
+        else:
+            ranks = sorted([r1, r2], key=lambda x: RANKS.index(x))
+            hand_key = f"{ranks[0]}{ranks[1]}o"
+
+        if hand_key not in grid_totals:
+            grid_totals[hand_key] = 0.0
+            grid_counts[hand_key] = 0
+            grid_actions[hand_key] = {}
+
+        grid_totals[hand_key] += weight
+        grid_counts[hand_key] += 1
+
+        # Aggregate action frequencies if strategy data available
+        if strategy and action_names and weight > 0:
+            for action_idx, action_name in enumerate(action_names):
+                if action_idx < len(strategy):
+                    action_freq = strategy[action_idx][combo_idx] if combo_idx < len(strategy[action_idx]) else 0
+                    if action_name not in grid_actions[hand_key]:
+                        grid_actions[hand_key][action_name] = 0.0
+                    grid_actions[hand_key][action_name] += action_freq * weight
+
+    # Calculate averages and normalize
+    grid = {}
+    for hand_key in grid_totals:
+        if grid_counts[hand_key] > 0:
+            avg_weight = grid_totals[hand_key] / grid_counts[hand_key]
+            normalized_weight = avg_weight / 10000.0
+
+            if normalized_weight > 0.001:
+                # Normalize action frequencies
+                actions = {}
+                total_action_weight = grid_totals[hand_key]  # Use total weight for action normalization
+                if total_action_weight > 0:
+                    for action_name, action_total in grid_actions[hand_key].items():
+                        # Normalize: action_total / total_weight gives weighted average frequency
+                        action_freq = action_total / total_action_weight
+                        if action_freq > 0.001:
+                            actions[action_name] = round(action_freq, 3)
+
+                grid[hand_key] = {
+                    "weight": round(normalized_weight, 3),
+                    "actions": actions
+                }
+
+    return grid
 
 
 # =============================================================================
@@ -536,6 +955,108 @@ def _build_parent_context(sim, parent_sim) -> list[dict]:
     return context
 
 
+def _build_previous_street_actions(sim) -> list[dict] | None:
+    """
+    Build previous street actions for a turn/river sim.
+
+    This wrapper gets the parent sim and calls _build_parent_context.
+    """
+    if not sim.parent_sim_id:
+        return None
+
+    parent_sim = storage.get_sim(sim.parent_sim_id, load_tree=False)
+    if not parent_sim:
+        return None
+
+    return _build_parent_context(sim, parent_sim)
+
+
+def _build_preflop_action_from_sim(sim) -> dict:
+    """
+    Build the preflop action dict from a sim's scenario field.
+
+    For custom preflop scenarios (e.g., "HJ_RFI_BTN_3B_HJ_Call"),
+    this reconstructs the path and looks up the full description.
+
+    For legacy SRP scenarios, uses a default based on positions.
+    """
+    scenario = sim.scenario or ""
+
+    # Check for legacy SRP format
+    if scenario.startswith("srp_"):
+        # e.g., "srp_utg_vs_bb" -> "UTG raises 2.5bb, BB calls"
+        return {
+            "street": "preflop",
+            "cards": "",
+            "actions": f"{sim.ip_position} raises 2.5bb, {sim.oop_position} calls",
+        }
+
+    # Try to parse as custom preflop scenario
+    # Format: "HJ_RFI_BTN_3B_HJ_Call" -> ["HJ_RFI", "BTN_3B", "HJ_Call"]
+    try:
+        # Split by position names to reconstruct the path
+        path = _parse_scenario_to_path(scenario)
+        if path:
+            # Look up the scenario data to get full node details
+            try:
+                scenario_data = preflop_storage.get_scenario_data(path)
+                nodes = scenario_data["nodes"]
+                description = build_preflop_description(nodes)
+                return {
+                    "street": "preflop",
+                    "cards": "",
+                    "actions": description,
+                }
+            except (ValueError, KeyError):
+                pass  # Fall through to default
+    except Exception:
+        pass  # Fall through to default
+
+    # Default fallback
+    return {
+        "street": "preflop",
+        "cards": "",
+        "actions": f"{sim.ip_position} raises 2.5bb, {sim.oop_position} calls",
+    }
+
+
+def _parse_scenario_to_path(scenario: str) -> list[str] | None:
+    """
+    Parse a scenario string back into a preflop path.
+
+    E.g., "HJ_RFI_BTN_3B_HJ_Call" -> ["HJ_RFI", "BTN_3B", "HJ_Call"]
+    """
+    if not scenario:
+        return None
+
+    # Known position prefixes
+    positions = {"SB", "BB", "UTG", "UTG1", "UTG2", "LJ", "HJ", "CO", "BTN"}
+
+    # Known action suffixes
+    actions = {"RFI", "3B", "4B", "5B", "Call"}
+
+    parts = scenario.split("_")
+    if not parts:
+        return None
+
+    path = []
+    i = 0
+    while i < len(parts):
+        # Look for a position
+        if parts[i] in positions:
+            pos = parts[i]
+            # Look for the action part(s)
+            if i + 1 < len(parts) and parts[i + 1] in actions:
+                path.append(f"{pos}_{parts[i + 1]}")
+                i += 2
+            else:
+                i += 1
+        else:
+            i += 1
+
+    return path if path else None
+
+
 @app.post("/sims/{sim_id}/random-spot", response_model=RandomSpotResponse)
 def generate_random_spot(sim_id: str, request: RandomSpotRequest | None = None):
     """
@@ -590,8 +1111,9 @@ def generate_random_spot(sim_id: str, request: RandomSpotRequest | None = None):
             detail=f"No interesting {sim.street} spots found in this sim"
         )
 
-    # If we have parent context, prepend it to the spot's street_actions
+    # Fix the preflop action in street_actions
     if parent_context:
+        # For turn/river sims with parent context
         existing_actions = spot.street_actions
 
         # Build new actions: parent context + current street actions (skip generic preflop)
@@ -602,6 +1124,16 @@ def generate_random_spot(sim_id: str, request: RandomSpotRequest | None = None):
                 new_actions.append(action)
 
         spot.street_actions = new_actions
+    else:
+        # For flop sims, fix the preflop action using the sim's scenario
+        preflop_action = _build_preflop_action_from_sim(sim)
+        new_actions = [preflop_action]
+
+        for action in spot.street_actions:
+            if action["street"] != "preflop":
+                new_actions.append(action)
+
+        spot.street_actions = new_actions
 
     # Save to spot_candidates
     storage.save_candidate(spot)
@@ -609,6 +1141,60 @@ def generate_random_spot(sim_id: str, request: RandomSpotRequest | None = None):
     return RandomSpotResponse(
         spot_id=spot.id,
         message=f"Generated {sim.street} spot: {spot.hero_combo} on {spot.board}",
+    )
+
+
+@app.post("/sims/{sim_id}/create-spot", response_model=RandomSpotResponse)
+def create_spot_at_path_endpoint(sim_id: str, request: CreateSpotAtPathRequest):
+    """
+    Create a spot at a specific tree path with a specific combo.
+
+    This allows browsing the tree and creating spots at any decision point,
+    regardless of whether it meets the "interesting spot" criteria.
+    """
+    from deepsolver.spot_extractor import create_spot_at_path
+
+    sim = storage.get_sim(sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Sim not found")
+
+    # Parse tree
+    tree = parse_tree(sim.tree)
+
+    # Build previous street actions
+    # For turn/river sims: include flop/turn actions from parent
+    # For flop sims: include correct preflop action from scenario
+    if sim.parent_sim_id and sim.parent_action_path:
+        previous_street_actions = _build_previous_street_actions(sim)
+    else:
+        # Flop sim - just need the preflop action
+        previous_street_actions = [_build_preflop_action_from_sim(sim)]
+
+    # Create spot at the specified path
+    spot = create_spot_at_path(
+        tree=tree,
+        path=request.path,
+        combo=request.combo,
+        board=sim.board,
+        ip_position=sim.ip_position,
+        oop_position=sim.oop_position,
+        task_id=f"sim-{sim.id}",
+        stack_size_bb=sim.stack_size_bb,
+        previous_street_actions=previous_street_actions,
+    )
+
+    if spot is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not create spot at this path with this combo. The combo may not be in range or the path may be invalid."
+        )
+
+    # Save the spot
+    storage.save_candidate(spot)
+
+    return RandomSpotResponse(
+        spot_id=spot.id,
+        message=f"Created spot: {spot.hero_combo} at {request.path}",
     )
 
 
@@ -677,6 +1263,8 @@ def get_tree_ranges(sim_id: str, path: str):
         oop_combos=result["oop_combos"],
         ip_range=result.get("ip_range"),
         oop_range=result.get("oop_range"),
+        strategy=result.get("strategy"),
+        action_names=result.get("action_names"),
     )
 
 
@@ -965,10 +1553,10 @@ def get_workflow_status(days: int = 14):
     return WorkflowStatusResponse(dates=dates)
 
 
-@app.get("/workflow/puzzles/{date}", response_model=list[ScheduledPuzzleResponse])
+@app.get("/workflow/puzzles/{date}", response_model=list[FullScheduledPuzzleResponse])
 def get_puzzles_for_date(date: str):
     """
-    Get all puzzles scheduled for a specific date.
+    Get all puzzles scheduled for a specific date with full details.
 
     Args:
         date: Date in YYYY-MM-DD format
@@ -976,18 +1564,85 @@ def get_puzzles_for_date(date: str):
     puzzles = storage.get_puzzles_by_date(date)
 
     return [
-        ScheduledPuzzleResponse(
+        FullScheduledPuzzleResponse(
             id=p.id,
             scheduled_date=p.scheduled_date,
-            title=p.title,
             question_text=p.question_text,
+            structure=p.structure,
+            effective_stacks=p.effective_stacks,
             hero=p.hero,
-            correct_answer=p.correct_answer,
+            action=p.action,
+            pot_size_at_decision=p.pot_size_at_decision,
+            answer_options=p.answer_options,
+            correct_answers=p.correct_answers,
+            explanations=p.explanations,
+            ev_by_action=p.ev_by_action,
+            action_frequencies=p.action_frequencies,
             difficulty=p.difficulty,
+            tags=p.tags,
             created_at=p.created_at.isoformat(),
         )
         for p in puzzles
     ]
+
+
+@app.put("/workflow/puzzles/{puzzle_id}", response_model=FullScheduledPuzzleResponse)
+def update_puzzle(puzzle_id: str, request: UpdatePuzzleRequest):
+    """
+    Update a scheduled puzzle.
+
+    Args:
+        puzzle_id: UUID of the puzzle to update
+        request: Fields to update (only non-null fields are updated)
+    """
+    # Get existing puzzle
+    puzzle = storage.get_scheduled_puzzle(puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    # Build update dict from non-null fields
+    updates = {}
+    if request.question_text is not None:
+        updates["QuestionText"] = request.question_text
+    if request.answer_options is not None:
+        updates["AnswerOptions"] = request.answer_options
+    if request.correct_answers is not None:
+        updates["CorrectAnswers"] = request.correct_answers
+    if request.explanations is not None:
+        updates["Explanations"] = request.explanations
+    if request.difficulty is not None:
+        updates["Difficulty"] = request.difficulty
+    if request.tags is not None:
+        updates["Tags"] = request.tags
+    if request.scheduled_date is not None:
+        updates["scheduled_date"] = request.scheduled_date
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Update in Firestore
+    storage.update_scheduled_puzzle(puzzle_id, updates)
+
+    # Fetch and return updated puzzle
+    updated = storage.get_scheduled_puzzle(puzzle_id)
+    return FullScheduledPuzzleResponse(
+        id=updated.id,
+        scheduled_date=updated.scheduled_date,
+        question_text=updated.question_text,
+        structure=updated.structure,
+        effective_stacks=updated.effective_stacks,
+        hero=updated.hero,
+        action=updated.action,
+        pot_size_at_decision=updated.pot_size_at_decision,
+        answer_options=updated.answer_options,
+        correct_answers=updated.correct_answers,
+        explanations=updated.explanations,
+        ev_by_action=updated.ev_by_action,
+        action_frequencies=updated.action_frequencies,
+        difficulty=updated.difficulty,
+        tags=updated.tags,
+        created_at=updated.created_at.isoformat(),
+    )
 
 
 # =============================================================================
@@ -1220,3 +1875,613 @@ def create_sim_from_preflop(request: PreflopSimRequest):
         message=f"Sim saved: {build_preflop_description(nodes)} on {board}. Go to Sims to generate spots.",
         sim_id=sim_id,
     )
+
+
+# =============================================================================
+# Day Plans
+# =============================================================================
+
+
+def _slot_to_response(slot: PuzzleSlot) -> PuzzleSlotResponse:
+    """Convert PuzzleSlot to response model."""
+    return PuzzleSlotResponse(
+        id=slot.id,
+        street=slot.street,
+        sim_id=slot.sim_id,
+        puzzle_id=slot.puzzle_id,
+        parent_slot_id=slot.parent_slot_id,
+        action_path=slot.action_path,
+        board=slot.board,
+        status=slot.status,
+    )
+
+
+def _config_to_response(config: PreflopConfig) -> PreflopConfigResponse:
+    """Convert PreflopConfig to response model."""
+    return PreflopConfigResponse(
+        id=config.id,
+        preflop_path=config.preflop_path,
+        ip_position=config.ip_position,
+        oop_position=config.oop_position,
+        description=config.description,
+        slots=[_slot_to_response(s) for s in config.slots],
+    )
+
+
+def _plan_to_response(plan: DayPlan) -> DayPlanResponse:
+    """Convert DayPlan to response model."""
+    return DayPlanResponse(
+        id=plan.id,
+        scheduled_date=plan.scheduled_date,
+        configs=[_config_to_response(c) for c in plan.configs],
+        status=plan.status,
+        created_at=plan.created_at.isoformat(),
+    )
+
+
+def _create_slots_for_config(config_id: str) -> list[PuzzleSlot]:
+    """
+    Create the 5 puzzle slots for a preflop config.
+
+    Structure:
+    - Flop 1 (index 0)
+      - Turn 1 (index 1) - stems from Flop 1
+    - Flop 2 (index 2)
+      - Turn 2 (index 3) - stems from Flop 2
+        - River (index 4) - stems from Turn 2
+    """
+    flop1_id = str(uuid.uuid4())
+    flop2_id = str(uuid.uuid4())
+    turn1_id = str(uuid.uuid4())
+    turn2_id = str(uuid.uuid4())
+    river_id = str(uuid.uuid4())
+
+    return [
+        PuzzleSlot(id=flop1_id, street="flop"),
+        PuzzleSlot(id=turn1_id, street="turn", parent_slot_id=flop1_id),
+        PuzzleSlot(id=flop2_id, street="flop"),
+        PuzzleSlot(id=turn2_id, street="turn", parent_slot_id=flop2_id),
+        PuzzleSlot(id=river_id, street="river", parent_slot_id=turn2_id),
+    ]
+
+
+@app.post("/day-plans", response_model=DayPlanResponse)
+def create_day_plan(request: CreateDayPlanRequest):
+    """
+    Create a new day plan for a specific date.
+
+    Returns existing plan if one already exists for that date.
+    """
+    # Check if plan already exists for this date
+    existing = storage.get_day_plan_by_date(request.scheduled_date)
+    if existing:
+        return _plan_to_response(existing)
+
+    # Create new plan
+    plan = DayPlan(
+        id=str(uuid.uuid4()),
+        scheduled_date=request.scheduled_date,
+        configs=[],
+        status="draft",
+        created_at=datetime.utcnow(),
+    )
+    storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.get("/day-plans/{date}", response_model=DayPlanResponse)
+def get_day_plan_by_date(date: str):
+    """
+    Get day plan for a specific date.
+
+    Creates a new plan if none exists.
+    """
+    plan = storage.get_day_plan_by_date(date)
+    if not plan:
+        # Create new plan
+        plan = DayPlan(
+            id=str(uuid.uuid4()),
+            scheduled_date=date,
+            configs=[],
+            status="draft",
+            created_at=datetime.utcnow(),
+        )
+        storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.put("/day-plans/{plan_id}/configs/{config_idx}", response_model=DayPlanResponse)
+def set_preflop_config(plan_id: str, config_idx: int, request: SetPreflopConfigRequest):
+    """
+    Set a preflop config on a day plan.
+
+    config_idx is 0 or 1 (for the two configs per day).
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    if config_idx not in (0, 1):
+        raise HTTPException(status_code=400, detail="config_idx must be 0 or 1")
+
+    # Get scenario summary from preflop path
+    try:
+        scenario_data = preflop_storage.get_scenario_data(request.preflop_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    nodes = scenario_data["nodes"]
+    description = build_preflop_description(nodes)
+    ip_pos = scenario_data["ip_position"]
+    oop_pos = scenario_data["oop_position"]
+
+    # Create new config with slots
+    config_id = str(uuid.uuid4())
+    new_config = PreflopConfig(
+        id=config_id,
+        preflop_path=request.preflop_path,
+        ip_position=ip_pos,
+        oop_position=oop_pos,
+        description=description,
+        slots=_create_slots_for_config(config_id),
+    )
+
+    # Ensure configs list has enough slots
+    while len(plan.configs) <= config_idx:
+        plan.configs.append(None)
+
+    plan.configs[config_idx] = new_config
+
+    # Filter out None values and update status
+    plan.configs = [c for c in plan.configs if c is not None]
+    if len(plan.configs) == 2:
+        plan.status = "in_progress"
+
+    # Save updated plan
+    storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.post("/day-plans/{plan_id}/slots/{slot_id}/create-sim", response_model=DayPlanResponse)
+def create_slot_sim(plan_id: str, slot_id: str, request: CreateSlotSimRequest):
+    """
+    Create a new sim for a flop slot.
+
+    For turn/river slots, use create-child-sim endpoint.
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    # Find the slot and its config
+    target_slot = None
+    target_config = None
+    for config in plan.configs:
+        for slot in config.slots:
+            if slot.id == slot_id:
+                target_slot = slot
+                target_config = config
+                break
+        if target_slot:
+            break
+
+    if not target_slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    if target_slot.street != "flop":
+        raise HTTPException(
+            status_code=400,
+            detail="Use create-child-sim for turn/river slots"
+        )
+
+    # Get scenario data
+    try:
+        scenario_data = preflop_storage.get_scenario_data(target_config.preflop_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    nodes = scenario_data["nodes"]
+    ip_range_dict = scenario_data["ip_range"]
+    oop_range_dict = scenario_data["oop_range"]
+    ip_pos = scenario_data["ip_position"]
+    oop_pos = scenario_data["oop_position"]
+
+    # Calculate pot and stacks
+    pot, stacks = calculate_pot_and_stacks(nodes)
+
+    # Get board
+    board = request.board if request.board else random_board()
+    if len(board) != 6:
+        raise HTTPException(status_code=400, detail="Board must be 6 characters (3 cards)")
+
+    # Convert ranges
+    ip_range = firestore_range_to_weights(ip_range_dict)
+    oop_range = firestore_range_to_weights(oop_range_dict)
+
+    # Build scenario name
+    scenario_name = "_".join(target_config.preflop_path)
+
+    # Build solver request
+    config = SpotConfig(
+        board=board,
+        ip_range=ip_range,
+        oop_range=oop_range,
+        pot_size_bb=pot,
+        effective_stack_bb=stacks,
+        street_id=1,  # Flop
+        ip_position=ip_pos,
+        oop_position=oop_pos,
+    )
+    builder = RequestBuilder(config)
+    builder.with_iterations(request.iterations)
+    solver_request = builder.build()
+
+    # Run solver
+    try:
+        token = get_api_token()
+        client = DeepsolverClient(api_token=token)
+        print(f"Running flop sim for day plan slot: {scenario_name} on {board}...")
+        result = client.run_and_wait(
+            solver_request, timeout_seconds=180, poll_interval_seconds=5
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"API error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Solver error: {e}")
+
+    if "tree" not in result:
+        raise HTTPException(status_code=500, detail="No tree in solver response")
+
+    # Save the sim
+    sim_id = str(uuid.uuid4())
+    sim = SolverSim(
+        id=sim_id,
+        board=board,
+        scenario=scenario_name,
+        ip_position=ip_pos,
+        oop_position=oop_pos,
+        stack_size_bb=stacks,
+        iterations=request.iterations,
+        tree_gcs_path="",
+        created_at=datetime.utcnow(),
+        street="flop",
+        tree=result["tree"],
+        pot_size_bb=pot,
+    )
+    storage.save_sim(sim)
+
+    # Update slot
+    target_slot.sim_id = sim_id
+    target_slot.board = board
+    target_slot.status = "sim_ready"
+
+    storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.post("/day-plans/{plan_id}/slots/{slot_id}/create-child-sim", response_model=DayPlanResponse)
+def create_child_slot_sim(plan_id: str, slot_id: str, request: CreateChildSlotSimRequest):
+    """
+    Create a turn/river sim from a parent slot.
+
+    The parent slot must have a sim_ready status.
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    # Find the slot and its config
+    target_slot = None
+    target_config = None
+    for config in plan.configs:
+        for slot in config.slots:
+            if slot.id == slot_id:
+                target_slot = slot
+                target_config = config
+                break
+        if target_slot:
+            break
+
+    if not target_slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    if target_slot.street == "flop":
+        raise HTTPException(status_code=400, detail="Use create-sim for flop slots")
+
+    # Find parent slot in the same config
+    parent_slot = None
+    if target_slot.parent_slot_id:
+        for slot in target_config.slots:
+            if slot.id == target_slot.parent_slot_id:
+                parent_slot = slot
+                break
+
+    if not parent_slot:
+        raise HTTPException(status_code=400, detail=f"Parent slot not found (parent_id: {target_slot.parent_slot_id})")
+
+    if parent_slot.status != "sim_ready" and parent_slot.status != "complete":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parent slot must have a sim (status: {parent_slot.status})"
+        )
+
+    if not parent_slot.sim_id:
+        raise HTTPException(status_code=400, detail="Parent slot has no sim")
+
+    # Get parent sim
+    parent_sim = storage.get_sim(parent_slot.sim_id)
+    if not parent_sim:
+        raise HTTPException(status_code=404, detail="Parent sim not found")
+
+    # Parse tree and get ranges at action path
+    tree = parse_tree(parent_sim.tree)
+    ranges_result = get_ranges_at_node(tree, request.action_path)
+
+    if "error" in ranges_result:
+        raise HTTPException(status_code=400, detail=ranges_result["error"])
+
+    if not ranges_result["is_terminal"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Action path must end at a terminal node"
+        )
+
+    ip_range = ranges_result["ip_range"]
+    oop_range = ranges_result["oop_range"]
+    pot_size_bb = ranges_result["pot_size"] / UNITS_PER_BB
+
+    # Deal card
+    if request.card:
+        new_card = request.card
+        if len(new_card) != 2:
+            raise HTTPException(status_code=400, detail="Card must be 2 characters")
+        if new_card in [parent_sim.board[i:i+2] for i in range(0, len(parent_sim.board), 2)]:
+            raise HTTPException(status_code=400, detail=f"Card {new_card} is already on the board")
+    else:
+        new_card = deal_random_card(parent_sim.board, ip_range, oop_range)
+
+    new_board = parent_sim.board + new_card
+
+    # Determine street
+    if target_slot.street == "turn":
+        street_id = 2
+        # Calculate stack reduction for turn
+        original_pot = parent_sim.pot_size_bb or 5.0
+        pot_increase = pot_size_bb - original_pot
+        stack_reduction = (parent_sim.pot_size_bb / 2 if parent_sim.pot_size_bb else 2.5) + (pot_increase / 2)
+        stack_size_bb = parent_sim.stack_size_bb - stack_reduction
+    else:  # river
+        street_id = 3
+        turn_pot_increase = pot_size_bb - (parent_sim.pot_size_bb or pot_size_bb)
+        stack_reduction = turn_pot_increase / 2
+        stack_size_bb = parent_sim.stack_size_bb - stack_reduction
+
+    # Build solver request
+    config = SpotConfig(
+        board=new_board,
+        ip_range=ip_range,
+        oop_range=oop_range,
+        pot_size_bb=pot_size_bb,
+        effective_stack_bb=stack_size_bb,
+        street_id=street_id,
+        ip_position=parent_sim.ip_position,
+        oop_position=parent_sim.oop_position,
+    )
+    builder = RequestBuilder(config)
+    builder.with_iterations(request.iterations)
+    solver_request = builder.build()
+
+    # Run solver
+    try:
+        token = get_api_token()
+        client = DeepsolverClient(api_token=token)
+        print(f"Running {target_slot.street} sim for day plan slot: {new_board}...")
+        result = client.run_and_wait(
+            solver_request, timeout_seconds=180, poll_interval_seconds=5
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"API error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Solver error: {e}")
+
+    if "tree" not in result:
+        raise HTTPException(status_code=500, detail="No tree in solver response")
+
+    # Save the sim
+    sim_id = str(uuid.uuid4())
+    sim = SolverSim(
+        id=sim_id,
+        board=new_board,
+        scenario=parent_sim.scenario,
+        ip_position=parent_sim.ip_position,
+        oop_position=parent_sim.oop_position,
+        stack_size_bb=stack_size_bb,
+        iterations=request.iterations,
+        tree_gcs_path="",
+        created_at=datetime.utcnow(),
+        street=target_slot.street,
+        tree=result["tree"],
+        parent_sim_id=parent_sim.id,
+        parent_action_path=request.action_path,
+        pot_size_bb=pot_size_bb,
+    )
+    storage.save_sim(sim)
+
+    # Update slot
+    target_slot.sim_id = sim_id
+    target_slot.board = new_board
+    target_slot.action_path = request.action_path
+    target_slot.status = "sim_ready"
+
+    storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.post("/day-plans/{plan_id}/slots/{slot_id}/link-sim", response_model=DayPlanResponse)
+def link_slot_sim(plan_id: str, slot_id: str, request: LinkSlotSimRequest):
+    """
+    Link an existing sim to a slot.
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    # Find the slot
+    target_slot = None
+    for config in plan.configs:
+        for slot in config.slots:
+            if slot.id == slot_id:
+                target_slot = slot
+                break
+        if target_slot:
+            break
+
+    if not target_slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    # Get the sim
+    sim = storage.get_sim(request.sim_id, load_tree=False)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Sim not found")
+
+    # Verify street matches
+    if sim.street != target_slot.street:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sim street ({sim.street}) doesn't match slot street ({target_slot.street})"
+        )
+
+    # Update slot
+    target_slot.sim_id = sim.id
+    target_slot.board = sim.board
+    target_slot.status = "sim_ready"
+
+    storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.put("/day-plans/{plan_id}/slots/{slot_id}", response_model=DayPlanResponse)
+def update_slot(plan_id: str, slot_id: str, request: UpdateSlotRequest):
+    """
+    Update a slot (typically after puzzle creation).
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    # Find the slot
+    target_slot = None
+    for config in plan.configs:
+        for slot in config.slots:
+            if slot.id == slot_id:
+                target_slot = slot
+                break
+        if target_slot:
+            break
+
+    if not target_slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    if request.puzzle_id is not None:
+        target_slot.puzzle_id = request.puzzle_id
+    if request.status is not None:
+        target_slot.status = request.status
+
+    # Check if all slots are complete
+    all_complete = all(
+        slot.status == "complete"
+        for config in plan.configs
+        for slot in config.slots
+    )
+    if all_complete:
+        plan.status = "complete"
+
+    storage.save_day_plan(plan)
+    return _plan_to_response(plan)
+
+
+@app.get("/day-plans/{plan_id}/slots/{slot_id}/compatible-sims", response_model=list[CompatibleSimResponse])
+def get_compatible_sims(plan_id: str, slot_id: str):
+    """
+    Find sims that can be linked to a slot.
+
+    For flop slots: any flop sim with matching positions.
+    For turn/river slots: must match parent sim chain.
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    # Find the slot and its config
+    target_slot = None
+    target_config = None
+    for config in plan.configs:
+        for slot in config.slots:
+            if slot.id == slot_id:
+                target_slot = slot
+                target_config = config
+                break
+        if target_slot:
+            break
+
+    if not target_slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    all_sims = storage.get_all_sims()
+    compatible = []
+
+    for sim in all_sims:
+        # Must match street
+        if sim.street != target_slot.street:
+            continue
+
+        # For flop slots, match positions
+        if target_slot.street == "flop":
+            if sim.ip_position == target_config.ip_position and sim.oop_position == target_config.oop_position:
+                compatible.append(CompatibleSimResponse(
+                    id=sim.id,
+                    board=sim.board,
+                    scenario=sim.scenario,
+                    ip_position=sim.ip_position,
+                    oop_position=sim.oop_position,
+                    street=sim.street,
+                    created_at=sim.created_at.isoformat(),
+                ))
+
+    return compatible
+
+
+@app.get("/day-plans/{plan_id}/configs/{config_idx}/existing-sims", response_model=list[CompatibleSimResponse])
+def get_existing_sims_for_config(plan_id: str, config_idx: int):
+    """
+    Find all existing sims (flop/turn/river) that match this preflop config.
+    """
+    plan = storage.get_day_plan(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Day plan not found")
+
+    if config_idx >= len(plan.configs):
+        raise HTTPException(status_code=404, detail="Config not found")
+
+    config = plan.configs[config_idx]
+    all_sims = storage.get_all_sims()
+    matching = []
+
+    for sim in all_sims:
+        # Match by positions (scenario name format varies)
+        if sim.ip_position == config.ip_position and sim.oop_position == config.oop_position:
+            matching.append(CompatibleSimResponse(
+                id=sim.id,
+                board=sim.board,
+                scenario=sim.scenario,
+                ip_position=sim.ip_position,
+                oop_position=sim.oop_position,
+                street=sim.street,
+                created_at=sim.created_at.isoformat(),
+            ))
+
+    # Sort by street (flop, turn, river) then by board
+    street_order = {"flop": 0, "turn": 1, "river": 2}
+    matching.sort(key=lambda s: (street_order.get(s.street, 99), s.board))
+
+    return matching

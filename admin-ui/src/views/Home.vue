@@ -1,17 +1,25 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../api'
+import PuzzleCard from '../components/PuzzleCard.vue'
+import PuzzleEditModal from '../components/PuzzleEditModal.vue'
 
 const router = useRouter()
 const loading = ref(true)
 const error = ref(null)
 const workflowStatus = ref({ dates: [] })
+const dayPlans = ref({}) // Cache of day plans by date
 
 // Selected date and its puzzles
 const selectedDate = ref(null)
 const selectedPuzzles = ref([])
 const loadingPuzzles = ref(false)
+
+// Edit modal state
+const editModalVisible = ref(false)
+const editingPuzzle = ref(null)
+const saving = ref(false)
 
 onMounted(async () => {
   try {
@@ -65,6 +73,49 @@ async function selectDate(dateStr) {
 function goToSims() {
   router.push('/sims')
 }
+
+function startDayPlan(dateStr) {
+  router.push(`/day-plan/${dateStr}`)
+}
+
+// Check if a date has a day plan in progress
+function hasDayPlan(dateStr) {
+  return dayPlans.value[dateStr] && dayPlans.value[dateStr].status !== 'draft'
+}
+
+// Get day plan status for a date
+function getDayPlanStatus(dateStr) {
+  return dayPlans.value[dateStr]?.status || null
+}
+
+function openEdit(puzzle) {
+  editingPuzzle.value = puzzle
+  editModalVisible.value = true
+}
+
+function closeEdit() {
+  editModalVisible.value = false
+  editingPuzzle.value = null
+}
+
+async function savePuzzle(data) {
+  if (!editingPuzzle.value) return
+
+  saving.value = true
+  try {
+    const updated = await api.updatePuzzle(editingPuzzle.value.id, data)
+    // Update the puzzle in the list
+    const index = selectedPuzzles.value.findIndex(p => p.id === editingPuzzle.value.id)
+    if (index !== -1) {
+      selectedPuzzles.value[index] = updated
+    }
+    closeEdit()
+  } catch (e) {
+    error.value = e.message
+  } finally {
+    saving.value = false
+  }
+}
 </script>
 
 <template>
@@ -103,26 +154,40 @@ function goToSims() {
 
         <!-- Selected Date Puzzles -->
         <div v-if="selectedDate" class="puzzles-panel">
-          <h3>{{ formatFullDate(selectedDate) }}</h3>
+          <div class="panel-header">
+            <h3>{{ formatFullDate(selectedDate) }}</h3>
+            <button
+              v-if="selectedPuzzles.length < 10"
+              class="start-plan-btn"
+              @click="startDayPlan(selectedDate)"
+            >
+              {{ selectedPuzzles.length === 0 ? 'Start Day Plan' : 'Continue Day Plan' }}
+            </button>
+          </div>
 
           <div v-if="loadingPuzzles" class="loading">Loading puzzles...</div>
           <div v-else-if="selectedPuzzles.length === 0" class="empty-puzzles">
-            No puzzles scheduled for this day yet.
+            <p>No puzzles scheduled for this day yet.</p>
+            <p class="empty-hint">Click "Start Day Plan" to create 10 puzzles for this day.</p>
           </div>
           <div v-else class="puzzle-list">
-            <div v-for="puzzle in selectedPuzzles" :key="puzzle.id" class="puzzle-item">
-              <div class="puzzle-title">{{ puzzle.title }}</div>
-              <div class="puzzle-meta">
-                <span class="tag">{{ puzzle.hero }}</span>
-                <span class="tag">{{ puzzle.street }}</span>
-                <span class="tag difficulty" :class="`diff-${puzzle.difficulty}`">
-                  {{ puzzle.difficulty === 1 ? 'Easy' : puzzle.difficulty === 2 ? 'Medium' : 'Hard' }}
-                </span>
-              </div>
-            </div>
+            <PuzzleCard
+              v-for="puzzle in selectedPuzzles"
+              :key="puzzle.id"
+              :puzzle="puzzle"
+              @edit="openEdit"
+            />
           </div>
         </div>
       </div>
+
+      <!-- Edit Modal -->
+      <PuzzleEditModal
+        :visible="editModalVisible"
+        :puzzle="editingPuzzle"
+        @close="closeEdit"
+        @save="savePuzzle"
+      />
 
       <div class="actions-section">
         <h2>Quick Actions</h2>
@@ -263,10 +328,33 @@ h2 {
   border-top: 1px solid #eee;
 }
 
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
 .puzzles-panel h3 {
-  margin: 0 0 16px 0;
+  margin: 0;
   font-size: 16px;
   color: #333;
+}
+
+.start-plan-btn {
+  padding: 8px 16px;
+  background: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.start-plan-btn:hover {
+  background: #1565c0;
 }
 
 .empty-puzzles {
@@ -276,6 +364,15 @@ h2 {
   text-align: center;
   background: #f8f9fa;
   border-radius: 8px;
+}
+
+.empty-puzzles p {
+  margin: 0 0 8px 0;
+}
+
+.empty-hint {
+  font-size: 12px;
+  color: #999;
 }
 
 .puzzle-list {

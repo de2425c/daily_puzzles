@@ -63,6 +63,14 @@ export default {
     return response.data
   },
 
+  async createSpotAtPath(simId, path, combo) {
+    const response = await api.post(`/sims/${simId}/create-spot`, {
+      path,
+      combo,
+    })
+    return response.data
+  },
+
   // Turn Builder
   async getTreeActions(simId, path = 'r:0') {
     const response = await api.get(`/sims/${simId}/tree/actions`, { params: { path } })
@@ -114,6 +122,11 @@ export default {
     return response.data
   },
 
+  async updatePuzzle(puzzleId, data) {
+    const response = await api.put(`/workflow/puzzles/${puzzleId}`, data)
+    return response.data
+  },
+
   // Preflop Builder
   async getPreflopPositions() {
     const response = await api.get('/preflop/positions')
@@ -149,6 +162,70 @@ export default {
       board,
       iterations,
     })
+    return response.data
+  },
+
+  // Day Plans
+  async createDayPlan(scheduledDate) {
+    const response = await api.post('/day-plans', {
+      scheduled_date: scheduledDate,
+    })
+    return response.data
+  },
+
+  async getDayPlan(date) {
+    const response = await api.get(`/day-plans/${date}`)
+    return response.data
+  },
+
+  async setPreflopConfig(planId, configIdx, preflopPath) {
+    const response = await api.put(`/day-plans/${planId}/configs/${configIdx}`, {
+      preflop_path: preflopPath,
+    })
+    return response.data
+  },
+
+  async createSlotSim(planId, slotId, board = null, iterations = 500) {
+    const response = await api.post(`/day-plans/${planId}/slots/${slotId}/create-sim`, {
+      board,
+      iterations,
+    })
+    return response.data
+  },
+
+  async createChildSlotSim(planId, slotId, actionPath, card = null, iterations = 500) {
+    const response = await api.post(`/day-plans/${planId}/slots/${slotId}/create-child-sim`, {
+      action_path: actionPath,
+      card,
+      iterations,
+    })
+    return response.data
+  },
+
+  async linkSlotSim(planId, slotId, simId) {
+    const response = await api.post(`/day-plans/${planId}/slots/${slotId}/link-sim`, {
+      sim_id: simId,
+    })
+    return response.data
+  },
+
+  async updateSlot(planId, slotId, data) {
+    const response = await api.put(`/day-plans/${planId}/slots/${slotId}`, data)
+    return response.data
+  },
+
+  async getCompatibleSims(planId, slotId) {
+    const response = await api.get(`/day-plans/${planId}/slots/${slotId}/compatible-sims`)
+    return response.data
+  },
+
+  async getExistingSimsForConfig(planId, configIdx) {
+    const response = await api.get(`/day-plans/${planId}/configs/${configIdx}/existing-sims`)
+    return response.data
+  },
+
+  async deleteSim(simId) {
+    const response = await api.delete(`/sims/${simId}`)
     return response.data
   },
 }

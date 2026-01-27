@@ -21,6 +21,14 @@ const props = defineProps({
   clickable: {
     type: Boolean,
     default: false
+  },
+  strategy: {
+    type: Array,
+    default: null  // shape: (num_actions, 1326)
+  },
+  actionNames: {
+    type: Array,
+    default: null  // action names for each row in strategy
   }
 })
 
@@ -106,7 +114,8 @@ const gridData = computed(() => {
         blockedCount: 0,
         isHero: heroCategory && heroCategory.ranks === (isPair ? label : label.slice(0, 2)) &&
                 (isPair || (isSuited ? heroCategory.type === 'suited' : heroCategory.type === 'offsuit')),
-        combos: []  // Store available combos for clicking
+        combos: [],  // Store available combos for clicking
+        actionSums: props.strategy ? new Array(props.strategy.length).fill(0) : []  // Sum of strategy per action
       }
     })
   )
@@ -148,6 +157,12 @@ const gridData = computed(() => {
       if (weight > 0) {
         cell.activeCount++
         cell.combos.push(combo)  // Store combo for clicking
+        // Accumulate strategy values per action
+        if (props.strategy) {
+          for (let a = 0; a < props.strategy.length; a++) {
+            cell.actionSums[a] += props.strategy[a][idx]
+          }
+        }
       }
     }
   })
@@ -172,8 +187,9 @@ const gridData = computed(() => {
 function handleCellClick(cell) {
   if (!props.clickable || cell.combos.length === 0) return
 
-  // Pick the first combo with weight > 0
-  const combo = cell.combos[0]
+  // Pick a random combo from the cell
+  const randomIndex = Math.floor(Math.random() * cell.combos.length)
+  const combo = cell.combos[randomIndex]
   emit('select-combo', combo)
 }
 
@@ -197,6 +213,43 @@ const totalStats = computed(() => {
     blocked: Math.round(blocked)
   }
 })
+
+// Get action frequency tooltip for a cell
+function getActionTooltip(cell) {
+  if (!props.strategy || !props.actionNames || cell.activeCount === 0) {
+    return ''
+  }
+
+  // Calculate average frequency per action (actionSum / total weight)
+  const totalWeight = cell.actionSums.reduce((sum, v) => sum + v, 0)
+  if (totalWeight === 0) return ''
+
+  const lines = []
+  for (let i = 0; i < props.actionNames.length; i++) {
+    const freq = (cell.actionSums[i] / totalWeight) * 100
+    if (freq > 0.5) {  // Only show actions > 0.5%
+      lines.push(`${props.actionNames[i]}: ${freq.toFixed(0)}%`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+// Get full tooltip for cell
+function getCellTooltip(cell) {
+  let tooltip = `${cell.label}: ${(cell.frequency * 100).toFixed(0)}% (${cell.activeCount}/${cell.totalCombos - cell.blockedCount} combos)`
+
+  const actionTooltip = getActionTooltip(cell)
+  if (actionTooltip) {
+    tooltip += '\n\n' + actionTooltip
+  }
+
+  if (props.clickable && cell.combos.length > 0) {
+    tooltip += '\n\nClick to select'
+  }
+
+  return tooltip
+}
 
 // Get cell background color based on frequency
 function getCellStyle(cell) {
@@ -257,7 +310,7 @@ function getCellStyle(cell) {
             'clickable': clickable && cell.combos.length > 0
           }"
           :style="getCellStyle(cell)"
-          :title="`${cell.label}: ${(cell.frequency * 100).toFixed(0)}% (${cell.activeCount}/${cell.totalCombos - cell.blockedCount} combos)${clickable && cell.combos.length > 0 ? ' - Click to select' : ''}`"
+          :title="getCellTooltip(cell)"
           @click="handleCellClick(cell)"
         >
           <span class="cell-label">{{ cell.label }}</span>

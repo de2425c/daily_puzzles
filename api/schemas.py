@@ -58,7 +58,6 @@ class PuzzleResponse(BaseModel):
 class ApproveRequest(BaseModel):
     """Request to approve a spot and create a puzzle."""
 
-    title: str
     question_text: str
     answer_options: list[str]  # Actions to include in the question
     correct_answers: list[str]  # Can have multiple correct answers
@@ -111,6 +110,13 @@ class RandomSpotRequest(BaseModel):
     hero_combo: str | None = None  # e.g., "AhKs" to use specific hand
 
 
+class CreateSpotAtPathRequest(BaseModel):
+    """Request to create a spot at a specific tree path."""
+
+    path: str  # Tree path like "r:0:c:b1650000"
+    combo: str  # Hero's combo like "AhKs"
+
+
 class RandomSpotResponse(BaseModel):
     """Response from generating a random spot from a sim."""
 
@@ -150,6 +156,9 @@ class TreeRangesResponse(BaseModel):
     oop_combos: int
     ip_range: list[float] | None = None   # 1326 weights for IP player
     oop_range: list[float] | None = None  # 1326 weights for OOP player
+    # Strategy data for showing action frequencies on hover
+    strategy: list[list[float]] | None = None  # shape: (num_actions, 1326)
+    action_names: list[str] | None = None  # Action names for each row in strategy
 
 
 class CreateTurnSimRequest(BaseModel):
@@ -212,16 +221,48 @@ class WorkflowStatusResponse(BaseModel):
 
 
 class ScheduledPuzzleResponse(BaseModel):
-    """Response model for a scheduled puzzle."""
+    """Response model for a scheduled puzzle (summary)."""
 
     id: str
     scheduled_date: str
-    title: str
     question_text: str
     hero: str
     correct_answer: str
     difficulty: int
     created_at: str
+
+
+class FullScheduledPuzzleResponse(BaseModel):
+    """Full response model for a scheduled puzzle with all details."""
+
+    id: str
+    scheduled_date: str
+    question_text: str
+    structure: str
+    effective_stacks: int
+    hero: str
+    action: dict
+    pot_size_at_decision: float
+    answer_options: list[str]
+    correct_answers: list[str]
+    explanations: dict[str, str]
+    ev_by_action: dict[str, float]
+    action_frequencies: dict[str, float]
+    difficulty: int
+    tags: list[str]
+    created_at: str
+
+
+class UpdatePuzzleRequest(BaseModel):
+    """Request to update a scheduled puzzle."""
+
+    question_text: str | None = None
+    answer_options: list[str] | None = None
+    correct_answers: list[str] | None = None
+    explanations: dict[str, str] | None = None
+    difficulty: int | None = None
+    tags: list[str] | None = None
+    scheduled_date: str | None = None
 
 
 # =============================================================================
@@ -266,3 +307,117 @@ class PreflopSimRequest(BaseModel):
     path: list[str]  # e.g., ["BTN_RFI", "BB_3B", "BTN_Call"]
     board: str | None = None  # Optional, random if not provided
     iterations: int = 500
+
+
+# =============================================================================
+# Premium Data (iOS)
+# =============================================================================
+
+
+class HeroHandData(BaseModel):
+    """Data for a single hand in the hero range grid."""
+
+    weight: float  # 0-1, frequency of hand in range
+    actions: dict[str, float]  # Action frequencies: {"Bet 1.6bb": 0.85, "Check": 0.15}
+
+
+class PremiumPuzzleData(BaseModel):
+    """Premium analysis data for a puzzle (iOS app)."""
+
+    puzzle_id: str
+    explanations: dict[str, str]  # Per-action explanations
+    ev_by_action: dict[str, float]  # EV for each action
+    action_frequencies: dict[str, float]  # GTO frequencies
+    hero_range_grid: dict[str, HeroHandData] | None = None  # 13x13 grid with actions: {"AA": {"weight": 1.0, "actions": {...}}}
+    villain_range_grid: dict[str, float] | None = None  # 13x13 grid for villain (static weights only)
+
+
+# =============================================================================
+# Day Plan Schemas
+# =============================================================================
+
+
+class PuzzleSlotResponse(BaseModel):
+    """Response model for a puzzle slot."""
+
+    id: str
+    street: str  # "flop", "turn", "river"
+    sim_id: str | None = None
+    puzzle_id: str | None = None
+    parent_slot_id: str | None = None
+    action_path: str | None = None
+    board: str | None = None
+    status: str = "empty"  # "empty", "sim_ready", "complete"
+
+
+class PreflopConfigResponse(BaseModel):
+    """Response model for a preflop config."""
+
+    id: str
+    preflop_path: list[str]
+    ip_position: str
+    oop_position: str
+    description: str
+    slots: list[PuzzleSlotResponse] = []
+
+
+class DayPlanResponse(BaseModel):
+    """Response model for a day plan."""
+
+    id: str
+    scheduled_date: str
+    configs: list[PreflopConfigResponse] = []
+    status: str = "draft"
+    created_at: str
+
+
+class CreateDayPlanRequest(BaseModel):
+    """Request to create a day plan."""
+
+    scheduled_date: str  # YYYY-MM-DD format
+
+
+class SetPreflopConfigRequest(BaseModel):
+    """Request to set a preflop config on a day plan."""
+
+    preflop_path: list[str]  # e.g., ["BTN_RFI", "BB_Call"]
+
+
+class CreateSlotSimRequest(BaseModel):
+    """Request to create a sim for a slot."""
+
+    board: str | None = None  # Random if not provided
+    iterations: int = 500
+
+
+class LinkSlotSimRequest(BaseModel):
+    """Request to link an existing sim to a slot."""
+
+    sim_id: str
+
+
+class UpdateSlotRequest(BaseModel):
+    """Request to update a slot after puzzle creation."""
+
+    puzzle_id: str | None = None
+    status: str | None = None
+
+
+class CreateChildSlotSimRequest(BaseModel):
+    """Request to create a turn/river sim from a parent slot."""
+
+    action_path: str  # Path in parent sim to terminal node
+    card: str | None = None  # Turn/river card, random if not provided
+    iterations: int = 500
+
+
+class CompatibleSimResponse(BaseModel):
+    """Response for a compatible sim that can be linked to a slot."""
+
+    id: str
+    board: str
+    scenario: str
+    ip_position: str
+    oop_position: str
+    street: str
+    created_at: str

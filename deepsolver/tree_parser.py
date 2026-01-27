@@ -329,7 +329,7 @@ def get_ranges_at_node(root: TreeNode, path: str) -> dict:
         path: Path string like "r:0:c:b1485000:c"
 
     Returns:
-        Dict with path, terminal status, combo counts, and full ranges.
+        Dict with path, terminal status, combo counts, full ranges, and strategy.
 
     Example:
         {
@@ -338,7 +338,9 @@ def get_ranges_at_node(root: TreeNode, path: str) -> dict:
             "ip_combos": 142,
             "oop_combos": 89,
             "ip_range": [...],  # 1326 weights
-            "oop_range": [...]  # 1326 weights
+            "oop_range": [...],  # 1326 weights
+            "strategy": [[...], [...]],  # num_actions x 1326
+            "action_names": ["Check", "Bet 1.6bb"]
         }
     """
     node = get_node_by_path(root, path)
@@ -351,12 +353,24 @@ def get_ranges_at_node(root: TreeNode, path: str) -> dict:
     ip_range = node.ranges[0]
     oop_range = node.ranges[1]
 
-    return {
+    # Calculate actual pot size: starting pot + bets from both players
+    actual_pot = node.pot_size
+    if node.bets:
+        actual_pot += sum(node.bets)
+
+    result = {
         "path": path,
         "is_terminal": node.is_terminal(),
-        "pot_size": node.pot_size,
+        "pot_size": actual_pot,
         "ip_combos": count_combos(ip_range),
         "oop_combos": count_combos(oop_range),
         "ip_range": ip_range,
         "oop_range": oop_range,
     }
+
+    # Add strategy data if this is a decision node
+    if not node.is_terminal() and node.strategy is not None and node.actions is not None:
+        result["strategy"] = node.strategy
+        result["action_names"] = [format_action(a, node.pot_size) for a in node.actions]
+
+    return result

@@ -13,7 +13,7 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google.cloud import storage as gcs
 
-from .models import spot_to_firestore, spot_from_firestore, ApprovedPuzzle, SolverSim, ScheduledPuzzle
+from .models import spot_to_firestore, spot_from_firestore, ApprovedPuzzle, SolverSim, ScheduledPuzzle, DayPlan
 
 if TYPE_CHECKING:
     from deepsolver.spot_extractor import SpotCandidate
@@ -72,6 +72,7 @@ class PuzzleStorage:
     DAILY_PUZZLES_COLLECTION = "daily_puzzles"
     NEW_DAILY_PUZZLES_COLLECTION = "new_daily_puzzles"
     SOLVER_SIMS_COLLECTION = "solver_sims"
+    DAY_PLANS_COLLECTION = "day_plans"
     GCS_BUCKET_NAME = "stack-24dea.firebasestorage.app"
     GCS_SIMS_PREFIX = "solver_sims"
 
@@ -638,3 +639,149 @@ class PuzzleStorage:
             date = puzzle.scheduled_date
             counts[date] = counts.get(date, 0) + 1
         return counts
+
+    def update_scheduled_puzzle(self, puzzle_id: str, updates: dict) -> bool:
+        """
+        Update fields in a scheduled puzzle.
+
+        Args:
+            puzzle_id: The puzzle's UUID
+            updates: Dictionary of field names to new values
+
+        Returns:
+            True if successful
+        """
+        if not updates:
+            return True
+
+        self._ensure_token()
+        path = f"{self.NEW_DAILY_PUZZLES_COLLECTION}/{puzzle_id}"
+
+        # Build updateMask with all field paths
+        field_paths = "&".join(f"updateMask.fieldPaths={field}" for field in updates.keys())
+        url = f"{self.base_url}/{path}?{field_paths}"
+
+        # Convert values to Firestore format
+        fields = {k: _to_firestore_value(v) for k, v in updates.items()}
+        payload = {"fields": fields}
+
+        response = requests.patch(url, headers=self.headers, json=payload, timeout=30)
+
+        if response.status_code == 200:
+            return True
+        else:
+            raise Exception(f"Firestore error: {response.status_code} - {response.text[:200]}")
+
+    # =========================================================================
+    # Day Plans
+    # =========================================================================
+
+    def save_day_plan(self, plan: DayPlan) -> str:
+        """
+        Save a day plan to the day_plans collection.
+
+        Args:
+            plan: DayPlan to save
+
+        Returns:
+            Document ID (plan.id)
+        """
+        doc = plan.to_firestore()
+        path = f"{self.DAY_PLANS_COLLECTION}/{plan.id}"
+        self._set_document(path, doc)
+        return plan.id
+
+    def get_day_plan(self, plan_id: str) -> DayPlan | None:
+        """
+        Get a day plan by ID.
+
+        Args:
+            plan_id: The plan's UUID
+
+        Returns:
+            DayPlan or None if not found
+        """
+        path = f"{self.DAY_PLANS_COLLECTION}/{plan_id}"
+        doc = self._get_document(path)
+        if doc:
+            return DayPlan.from_firestore(doc)
+        return None
+
+    def get_day_plan_by_date(self, scheduled_date: str) -> DayPlan | None:
+        """
+        Get a day plan by scheduled date.
+
+        Args:
+            scheduled_date: Date in YYYY-MM-DD format
+
+        Returns:
+            DayPlan or None if not found
+        """
+        all_plans = self._list_documents(self.DAY_PLANS_COLLECTION)
+        for doc in all_plans:
+            if doc.get("scheduled_date") == scheduled_date:
+                return DayPlan.from_firestore(doc)
+        return None
+
+    def get_all_day_plans(self) -> list[DayPlan]:
+        """
+        Get all day plans.
+
+        Returns:
+            List of DayPlans sorted by scheduled_date
+        """
+        all_docs = self._list_documents(self.DAY_PLANS_COLLECTION)
+
+        plans = []
+        for doc in all_docs:
+            try:
+                plans.append(DayPlan.from_firestore(doc))
+            except KeyError:
+                pass
+
+        return sorted(plans, key=lambda p: p.scheduled_date)
+
+    def update_day_plan(self, plan_id: str, updates: dict) -> bool:
+        """
+        Update fields in a day plan.
+
+        Args:
+            plan_id: The plan's UUID
+            updates: Dictionary of field names to new values
+
+        Returns:
+            True if successful
+        """
+        if not updates:
+            return True
+
+        self._ensure_token()
+        path = f"{self.DAY_PLANS_COLLECTION}/{plan_id}"
+
+        # Build updateMask with all field paths
+        field_paths = "&".join(f"updateMask.fieldPaths={field}" for field in updates.keys())
+        url = f"{self.base_url}/{path}?{field_paths}"
+
+        # Convert values to Firestore format
+        fields = {k: _to_firestore_value(v) for k, v in updates.items()}
+        payload = {"fields": fields}
+
+        response = requests.patch(url, headers=self.headers, json=payload, timeout=30)
+
+        if response.status_code == 200:
+            return True
+        else:
+            raise Exception(f"Firestore error: {response.status_code} - {response.text[:200]}")
+
+    def delete_day_plan(self, plan_id: str) -> bool:
+        """
+        Delete a day plan by ID.
+
+        Args:
+            plan_id: The plan's UUID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        path = f"{self.DAY_PLANS_COLLECTION}/{plan_id}"
+        return self._delete_document(path)

@@ -1,8 +1,15 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import api from '../api'
 
-const emit = defineEmits(['scenario-ready', 'sim-created'])
+const props = defineProps({
+  disabled: {
+    type: Boolean,
+    default: false
+  }
+})
+
+const emit = defineEmits(['select'])
 
 // State
 const loading = ref(false)
@@ -13,32 +20,8 @@ const currentNode = ref(null)
 const availableResponses = ref([])
 const scenarioSummary = ref(null)
 
-// Board input - supports multiple boards (one per line or comma-separated)
-const boardInput = ref('')
-const batchMode = ref(false)
-
-// Generating state
-const generating = ref(false)
-const generatingMessage = ref('')
-const batchProgress = ref({ current: 0, total: 0, completed: [] })
-
 // Computed
-const isComplete = computed(() => {
-  // Complete when we have at least 2 actions and no more children (or user stops)
-  return scenarioSummary.value !== null
-})
-
-// Parse board input into list of boards
-const boardList = computed(() => {
-  if (!boardInput.value.trim()) return []
-  // Split by newlines or commas, clean up each board
-  return boardInput.value
-    .split(/[\n,]+/)
-    .map(b => b.trim().replace(/\s/g, ''))
-    .filter(b => b.length === 6) // Only valid flops (6 chars)
-})
-
-const hasBatchBoards = computed(() => boardList.value.length > 1)
+const isComplete = computed(() => scenarioSummary.value !== null)
 
 const actionHistory = computed(() => {
   return selectedPath.value.map(name => {
@@ -58,7 +41,6 @@ function formatAction(action) {
   return action
 }
 
-// Load positions on mount
 async function loadPositions() {
   try {
     positions.value = await api.getPreflopPositions()
@@ -67,7 +49,6 @@ async function loadPositions() {
   }
 }
 
-// Select opener position
 async function selectOpener(position) {
   loading.value = true
   error.value = null
@@ -79,7 +60,6 @@ async function selectOpener(position) {
     selectedPath.value = [rfiName]
     currentNode.value = node
 
-    // Load responses
     const children = await api.getPreflopChildren([rfiName])
     availableResponses.value = children
   } catch (e) {
@@ -89,7 +69,6 @@ async function selectOpener(position) {
   }
 }
 
-// Select a response action
 async function selectResponse(response) {
   loading.value = true
   error.value = null
@@ -98,16 +77,12 @@ async function selectResponse(response) {
     const newPath = [...selectedPath.value, response.name]
     selectedPath.value = newPath
 
-    // Get the node data
     const node = await api.getPreflopNode(newPath)
     currentNode.value = node
 
-    // Check if this is a terminal action (Call) or get more children
     if (response.action === 'Call' || node.children.length === 0) {
-      // Terminal - get scenario summary
       await loadScenarioSummary()
     } else {
-      // Load next responses
       const children = await api.getPreflopChildren(newPath)
       availableResponses.value = children
     }
@@ -122,74 +97,23 @@ async function loadScenarioSummary() {
   try {
     scenarioSummary.value = await api.getPreflopScenario(selectedPath.value)
     availableResponses.value = []
-    emit('scenario-ready', scenarioSummary.value)
   } catch (e) {
     error.value = 'Failed to load scenario summary: ' + e.message
   }
 }
 
-// Reset and start over
 function reset() {
   selectedPath.value = []
   currentNode.value = null
   availableResponses.value = []
   scenarioSummary.value = null
-  boardInput.value = ''
-  batchMode.value = false
-  batchProgress.value = { current: 0, total: 0, completed: [] }
   error.value = null
 }
 
-// Generate the flop sim (single or batch)
-async function generateSim() {
-  generating.value = true
-  error.value = null
-
-  const boards = boardList.value.length > 0 ? boardList.value : [null] // null = random
-
-  if (boards.length === 1) {
-    // Single board mode
-    generatingMessage.value = 'Submitting to solver...'
-    try {
-      const result = await api.createPreflopSim(selectedPath.value, boards[0], 500)
-      generatingMessage.value = 'Done!'
-      emit('sim-created', result)
-    } catch (e) {
-      error.value = 'Failed to generate sim: ' + e.message
-    } finally {
-      generating.value = false
-      generatingMessage.value = ''
-    }
-  } else {
-    // Batch mode - generate multiple sims sequentially
-    batchMode.value = true
-    batchProgress.value = { current: 0, total: boards.length, completed: [] }
-
-    for (let i = 0; i < boards.length; i++) {
-      const board = boards[i]
-      batchProgress.value.current = i + 1
-      generatingMessage.value = `Running ${board} (${i + 1}/${boards.length})...`
-
-      try {
-        const result = await api.createPreflopSim(selectedPath.value, board, 500)
-        batchProgress.value.completed.push({ board, sim_id: result.sim_id, success: true })
-      } catch (e) {
-        batchProgress.value.completed.push({ board, error: e.message, success: false })
-      }
-    }
-
-    generatingMessage.value = 'Batch complete!'
-    generating.value = false
-  }
+function confirmSelection() {
+  emit('select', selectedPath.value)
 }
 
-// Format size with bb
-function formatSize(size) {
-  if (size === null || size === undefined) return ''
-  return `${size}bb`
-}
-
-// Get label for response button
 function getResponseLabel(response) {
   const pos = response.name.split('_')[0]
   const action = response.action === 'Raise' ?
@@ -198,24 +122,23 @@ function getResponseLabel(response) {
   return `${pos} ${action}`
 }
 
-// Load positions on component mount
 loadPositions()
 </script>
 
 <template>
-  <div class="preflop-builder">
+  <div class="preflop-config-selector">
     <div v-if="error" class="error">{{ error }}</div>
 
     <!-- Step 1: Select Opener -->
     <div class="step" v-if="selectedPath.length === 0">
-      <h3>Select Opener</h3>
+      <h3>Select Opener Position</h3>
       <div class="position-buttons">
         <button
           v-for="pos in positions"
           :key="pos"
           @click="selectOpener(pos)"
           class="position-btn"
-          :disabled="loading"
+          :disabled="loading || disabled"
         >
           {{ pos }}
         </button>
@@ -240,7 +163,7 @@ loadPositions()
           :key="resp.name"
           @click="selectResponse(resp)"
           class="response-btn"
-          :disabled="loading"
+          :disabled="loading || disabled"
         >
           {{ getResponseLabel(resp) }}
         </button>
@@ -273,54 +196,12 @@ loadPositions()
         </div>
       </div>
 
-      <div class="board-input">
-        <label>
-          Boards (one per line or comma-separated, random if empty)
-          <span v-if="boardList.length > 0" class="board-count">
-            {{ boardList.length }} valid flop{{ boardList.length !== 1 ? 's' : '' }} detected
-          </span>
-        </label>
-        <textarea
-          v-model="boardInput"
-          placeholder="AcAdKh&#10;AcQdQh&#10;AcQd9c&#10;...or leave empty for random"
-          rows="4"
-          :disabled="generating"
-        ></textarea>
-      </div>
-
-      <!-- Batch Progress -->
-      <div v-if="batchMode && batchProgress.total > 0" class="batch-progress">
-        <div class="progress-bar">
-          <div
-            class="progress-fill"
-            :style="{ width: (batchProgress.current / batchProgress.total * 100) + '%' }"
-          ></div>
-        </div>
-        <div class="progress-text">{{ generatingMessage }}</div>
-
-        <!-- Completed Results -->
-        <div v-if="batchProgress.completed.length > 0" class="batch-results">
-          <div
-            v-for="(result, i) in batchProgress.completed"
-            :key="i"
-            class="batch-result"
-            :class="{ success: result.success, failed: !result.success }"
-          >
-            <span class="result-board">{{ result.board }}</span>
-            <span v-if="result.success" class="result-status">
-              <router-link :to="`/sims/${result.sim_id}`">View</router-link>
-            </span>
-            <span v-else class="result-status error">{{ result.error }}</span>
-          </div>
-        </div>
-      </div>
-
       <div class="actions">
-        <button @click="reset" class="btn-secondary" :disabled="generating">
+        <button @click="reset" class="btn-secondary" :disabled="disabled">
           Start Over
         </button>
-        <button @click="generateSim" class="btn-primary" :disabled="generating || batchMode">
-          {{ generating ? generatingMessage : (hasBatchBoards ? `Generate ${boardList.length} Sims` : 'Generate Flop Sim') }}
+        <button @click="confirmSelection" class="btn-primary" :disabled="disabled">
+          Use This Scenario
         </button>
       </div>
     </div>
@@ -328,11 +209,8 @@ loadPositions()
 </template>
 
 <style scoped>
-.preflop-builder {
-  background: #fff;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+.preflop-config-selector {
+  padding: 16px 0;
 }
 
 .error {
@@ -467,111 +345,6 @@ loadPositions()
   color: #333;
 }
 
-.board-input {
-  margin-bottom: 20px;
-}
-
-.board-input label {
-  display: block;
-  font-size: 13px;
-  color: #666;
-  margin-bottom: 6px;
-}
-
-.board-count {
-  margin-left: 8px;
-  color: #1976d2;
-  font-weight: 600;
-}
-
-.board-input textarea {
-  width: 100%;
-  max-width: 400px;
-  padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-  font-family: monospace;
-  resize: vertical;
-}
-
-.board-input textarea:focus {
-  outline: none;
-  border-color: #1976d2;
-}
-
-/* Batch Progress */
-.batch-progress {
-  margin-bottom: 20px;
-  padding: 16px;
-  background: #f8f9fa;
-  border-radius: 8px;
-}
-
-.progress-bar {
-  height: 8px;
-  background: #e0e0e0;
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: #1976d2;
-  transition: width 0.3s ease;
-}
-
-.progress-text {
-  font-size: 13px;
-  color: #666;
-  margin-bottom: 12px;
-}
-
-.batch-results {
-  max-height: 200px;
-  overflow-y: auto;
-  border-top: 1px solid #e0e0e0;
-  padding-top: 12px;
-}
-
-.batch-result {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: 4px;
-  margin-bottom: 4px;
-  font-size: 13px;
-}
-
-.batch-result.success {
-  background: #e8f5e9;
-}
-
-.batch-result.failed {
-  background: #ffebee;
-}
-
-.result-board {
-  font-family: monospace;
-  font-weight: 600;
-}
-
-.result-status a {
-  color: #1976d2;
-  text-decoration: none;
-}
-
-.result-status a:hover {
-  text-decoration: underline;
-}
-
-.result-status.error {
-  color: #c62828;
-  font-size: 12px;
-}
-
 .actions {
   display: flex;
   gap: 12px;
@@ -610,11 +383,6 @@ loadPositions()
 
 .btn-secondary:hover:not(:disabled) {
   background: #f5f5f5;
-}
-
-.btn-secondary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 @media (max-width: 600px) {

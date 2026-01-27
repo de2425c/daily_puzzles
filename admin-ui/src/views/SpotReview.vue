@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import RangeGrid from '../components/RangeGrid.vue'
+import CardPicker from '../components/CardPicker.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,8 +23,10 @@ const showRegenOptions = ref(false)
 const regenPosition = ref('')  // '', 'IP', 'OOP'
 const regenCombo = ref('')     // '' or specific combo like 'AhKs'
 
+// Card picker
+const showCardPicker = ref(false)
+
 // Form data
-const title = ref('')
 const questionText = ref('')
 const difficulty = ref(2)
 const tags = ref([])
@@ -33,9 +36,22 @@ const scheduledDate = ref('')
 // Action data: {action: string, selected: bool, correct: bool, explanation: string}
 const actionData = ref([])
 
-// Get today's date in YYYY-MM-DD format
+// Day plan context from query params
+const dayPlanContext = computed(() => {
+  if (route.query.dayPlanId && route.query.slotId) {
+    return {
+      dayPlanId: route.query.dayPlanId,
+      slotId: route.query.slotId,
+      scheduledDate: route.query.scheduledDate,
+      returnTo: route.query.returnTo
+    }
+  }
+  return null
+})
+
+// Get scheduled date from day plan context or use today
 const today = new Date().toISOString().split('T')[0]
-scheduledDate.value = today
+scheduledDate.value = route.query.scheduledDate || today
 
 // Suggested tags based on spot
 const suggestedTags = computed(() => {
@@ -46,11 +62,26 @@ const suggestedTags = computed(() => {
   ]
 })
 
+// Blocked cards for card picker (board cards)
+const blockedCards = computed(() => {
+  if (!spot.value?.board) return []
+  // Parse board string like "AcQd9c" into ["Ac", "Qd", "9c"]
+  return spot.value.board.match(/.{2}/g) || []
+})
+
+function openCardPicker() {
+  showCardPicker.value = true
+}
+
+function onCardPickerSelect(combo) {
+  showCardPicker.value = false
+  handleComboSelect(combo)
+}
+
 async function loadSpot(spotId) {
   loading.value = true
   error.value = null
   spot.value = null
-  title.value = ''
   heroRange.value = null
 
   try {
@@ -117,21 +148,16 @@ async function loadRangeData() {
 }
 
 async function handleComboSelect(combo) {
-  // Regenerate spot with the selected combo
+  // Create spot at the same tree path with the selected combo
+  // This preserves the action sequence and filtered ranges
   regenerating.value = true
   error.value = null
 
   try {
     const simId = spot.value.source_task_id.replace('sim-', '')
 
-    // Determine hero position for API (IP or OOP)
-    const heroIsOOP = spot.value.hero_position === 'BB' || spot.value.hero_position === 'SB'
-    const heroPosition = heroIsOOP ? 'OOP' : 'IP'
-
-    const result = await api.generateRandomSpot(simId, {
-      heroPosition,
-      heroCombo: combo
-    })
+    // Use createSpotAtPath to preserve the action sequence
+    const result = await api.createSpotAtPath(simId, spot.value.tree_path, combo)
 
     // Navigate to the new spot
     router.push(`/spots/${result.spot_id}`)
@@ -215,10 +241,6 @@ const explanationsMap = computed(() => {
 })
 
 async function approve() {
-  if (!title.value) {
-    error.value = 'Please fill in the title'
-    return
-  }
   if (!scheduledDate.value) {
     error.value = 'Please select a scheduled date'
     return
@@ -245,8 +267,7 @@ async function approve() {
   error.value = null
 
   try {
-    await api.approveSpot(spot.value.id, {
-      title: title.value,
+    const result = await api.approveSpot(spot.value.id, {
       question_text: questionText.value,
       answer_options: selectedActions.value,
       correct_answers: correctActions.value,
@@ -255,7 +276,23 @@ async function approve() {
       tags: tags.value,
       scheduled_date: scheduledDate.value,
     })
-    router.push('/')
+
+    // If we have day plan context, update the slot status
+    if (dayPlanContext.value) {
+      try {
+        await api.updateSlot(
+          dayPlanContext.value.dayPlanId,
+          dayPlanContext.value.slotId,
+          { puzzle_id: result.id, status: 'complete' }
+        )
+      } catch (e) {
+        console.error('Failed to update slot:', e)
+      }
+      // Navigate back to day plan
+      router.push(dayPlanContext.value.returnTo || `/day-plan/${scheduledDate.value}`)
+    } else {
+      router.push('/')
+    }
   } catch (e) {
     error.value = e.response?.data?.detail || e.message
   } finally {
@@ -352,9 +389,10 @@ async function regenerate(withOptions = false) {
               <div class="hero-label">HERO</div>
               <div class="hero-info">
                 <span class="hero-position">{{ spot.hero_position }}</span>
-                <div class="hero-hand">
+                <div class="hero-hand clickable" @click="openCardPicker" title="Click to change hand">
                   <span class="card-chip hero">{{ spot.hero_combo.slice(0,2) }}</span>
                   <span class="card-chip hero">{{ spot.hero_combo.slice(2,4) }}</span>
+                  <span class="edit-icon">&#9998;</span>
                 </div>
               </div>
             </div>
@@ -444,12 +482,11 @@ async function regenerate(withOptions = false) {
           <div class="form-section">
             <h2>Create Puzzle</h2>
 
-            <div v-if="error" class="error">{{ error }}</div>
-
-            <div class="form-group">
-              <label>Title</label>
-              <input v-model="title" placeholder="e.g., River Value Bet" />
+            <div v-if="dayPlanContext" class="day-plan-badge">
+              Creating puzzle for day plan: {{ dayPlanContext.scheduledDate }}
             </div>
+
+            <div v-if="error" class="error">{{ error }}</div>
 
             <div class="form-group">
               <label>Question</label>
@@ -572,6 +609,15 @@ async function regenerate(withOptions = false) {
           </details>
         </div>
       </div>
+
+      <!-- Card Picker Modal -->
+      <CardPicker
+        :visible="showCardPicker"
+        :current-combo="spot?.hero_combo"
+        :blocked-cards="blockedCards"
+        @select="onCardPickerSelect"
+        @close="showCardPicker = false"
+      />
     </template>
   </div>
 </template>
@@ -648,6 +694,33 @@ async function regenerate(withOptions = false) {
 .hero-hand {
   display: flex;
   gap: 4px;
+  position: relative;
+}
+
+.hero-hand.clickable {
+  cursor: pointer;
+  padding: 4px;
+  margin: -4px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.hero-hand.clickable:hover {
+  background: rgba(25, 118, 210, 0.1);
+}
+
+.hero-hand .edit-icon {
+  display: none;
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+  color: #1976d2;
+}
+
+.hero-hand.clickable:hover .edit-icon {
+  display: block;
 }
 
 .section-label {
@@ -838,6 +911,16 @@ tr.selected.correct {
 h2 {
   margin: 0 0 16px 0;
   font-size: 18px;
+}
+
+.day-plan-badge {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .form-group {
