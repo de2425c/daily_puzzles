@@ -672,6 +672,29 @@ class PuzzleStorage:
         else:
             raise Exception(f"Firestore error: {response.status_code} - {response.text[:200]}")
 
+    def delete_scheduled_puzzle(self, puzzle_id: str) -> bool:
+        """
+        Delete a scheduled puzzle.
+
+        Args:
+            puzzle_id: The puzzle's UUID
+
+        Returns:
+            True if successful
+        """
+        self._ensure_token()
+        path = f"{self.NEW_DAILY_PUZZLES_COLLECTION}/{puzzle_id}"
+        url = f"{self.base_url}/{path}"
+
+        response = requests.delete(url, headers=self.headers, timeout=30)
+
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 404:
+            return False  # Already deleted
+        else:
+            raise Exception(f"Firestore error: {response.status_code} - {response.text[:200]}")
+
     # =========================================================================
     # Day Plans
     # =========================================================================

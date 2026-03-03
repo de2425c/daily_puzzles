@@ -19,6 +19,10 @@ const props = defineProps({
   oopPosition: {
     type: String,
     required: true
+  },
+  initialPath: {
+    type: String,
+    default: null
   }
 })
 
@@ -148,8 +152,63 @@ function formatActionLabel(action) {
 }
 
 // Load on mount and when simId changes
-onMounted(loadNode)
+onMounted(() => {
+  if (props.initialPath) {
+    currentPath.value = props.initialPath
+    // Build path history from initial path
+    buildPathHistory(props.initialPath)
+  }
+  loadNode()
+})
 watch(() => props.simId, loadNode)
+
+// Build path history from a path string like "r:0:c:b1500000"
+function buildPathHistory(path) {
+  const parts = path.split(':')
+  if (parts.length <= 2) return  // Just "r:0", no history needed
+
+  let historyPath = 'r:0'
+  pathHistory.value = []
+
+  for (let i = 2; i < parts.length; i++) {
+    pathHistory.value.push({
+      path: historyPath,
+      label: getPathLabelForPath(historyPath),
+      player: i % 2 === 0 ? props.oopPosition : props.ipPosition
+    })
+    historyPath += ':' + parts[i]
+  }
+}
+
+// Get path label for a specific path
+function getPathLabelForPath(path) {
+  if (path === 'r:0') return 'Start'
+
+  const parts = path.split(':').slice(2)
+  const labels = []
+  let player = 1  // OOP acts first
+
+  for (const part of parts) {
+    const playerName = player === 1 ? props.oopPosition : props.ipPosition
+    let actionLabel = ''
+
+    if (part === 'c') {
+      actionLabel = 'checks'
+    } else if (part === 'f') {
+      actionLabel = 'folds'
+    } else if (part.startsWith('b')) {
+      const amount = parseInt(part.slice(1)) / 1000000
+      actionLabel = `bets ${amount.toFixed(1)}bb`
+    } else if (part === 'a') {
+      actionLabel = 'all-in'
+    }
+
+    labels.push(`${playerName} ${actionLabel}`)
+    player = 1 - player
+  }
+
+  return labels.join(' → ')
+}
 </script>
 
 <template>

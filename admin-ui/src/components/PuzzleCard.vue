@@ -8,7 +8,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['edit'])
+const emit = defineEmits(['edit', 'view-solver', 'delete'])
 
 const showExplanations = ref(false)
 
@@ -58,7 +58,11 @@ function getFreq(option) {
   <div class="puzzle-card">
     <div class="card-header">
       <div class="question-text">{{ puzzle.question_text }}</div>
-      <button class="edit-btn" @click="emit('edit', puzzle)">Edit</button>
+      <div class="header-buttons">
+        <button class="solver-btn" @click="emit('view-solver', puzzle)">Full Edit</button>
+        <button class="edit-btn" @click="emit('edit', puzzle)">Edit</button>
+        <button class="delete-btn" @click="emit('delete', puzzle)">Delete</button>
+      </div>
     </div>
 
     <div class="card-info">
@@ -138,6 +142,25 @@ function getFreq(option) {
   padding-right: 12px;
 }
 
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.solver-btn {
+  background: #43a047;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.solver-btn:hover {
+  background: #388e3c;
+}
+
 .edit-btn {
   background: #1976d2;
   color: white;
@@ -150,6 +173,20 @@ function getFreq(option) {
 
 .edit-btn:hover {
   background: #1565c0;
+}
+
+.delete-btn {
+  background: #dc3545;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.delete-btn:hover {
+  background: #c82333;
 }
 
 .card-info {

@@ -6,6 +6,26 @@ from __future__ import annotations
 # Position order from OOP to IP (SB is most OOP, BTN is most IP)
 POSITION_ORDER = ["SB", "BB", "UTG", "UTG1", "UTG2", "LJ", "HJ", "CO", "BTN"]
 
+# 6-max position mapping: LJ (Lojack) = UTG in 6-max
+# The iOS app uses UTG for the first position, so we normalize LJ -> UTG
+SIXMAX_POSITION_MAP = {"LJ": "UTG"}
+
+
+def normalize_position_for_6max(position: str) -> str:
+    """
+    Normalize a position name for 6-max display.
+
+    In 6-max, LJ (Lojack) is the same as UTG (first to act).
+    The iOS app expects UTG, so we convert LJ -> UTG.
+
+    Args:
+        position: Position name like "LJ", "UTG", "BB", etc.
+
+    Returns:
+        Normalized position name (LJ becomes UTG, others unchanged)
+    """
+    return SIXMAX_POSITION_MAP.get(position, position)
+
 
 def calculate_pot_and_stacks(
     nodes: list[dict],

@@ -11,6 +11,20 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
+# Position normalization for 6-max (LJ -> UTG)
+# =============================================================================
+
+# In 6-max, LJ (Lojack) is the same as UTG (first to act)
+# The iOS app expects UTG, so we normalize LJ -> UTG
+SIXMAX_POSITION_MAP = {"LJ": "UTG"}
+
+
+def _normalize_position(position: str) -> str:
+    """Normalize position for 6-max: LJ -> UTG."""
+    return SIXMAX_POSITION_MAP.get(position, position)
+
+
+# =============================================================================
 # Day Plan Models
 # =============================================================================
 
@@ -26,11 +40,16 @@ class PuzzleSlot:
     parent_slot_id: str | None = None  # Parent flop/turn slot
     action_path: str | None = None  # Path taken in parent sim (e.g., "r:0:c:b1650000:c")
     board: str | None = None  # Board cards
+    planned_hero_hand: str | None = None  # Hero hand for import pipeline
     status: str = "empty"  # "empty", "sim_ready", "complete"
+    tree_path: str | None = None  # Path in sim tree to decision node
+    top_combos: list[dict] | None = None  # Ranked combos: [{"combo": "KsKc", "freq": 0.92, ...}]
+    line: list[str] | None = None  # Action line for this spot
+    decision_idx: int | None = None  # Index in line where hero decides
 
     def to_dict(self) -> dict:
         """Convert to dictionary for Firestore storage."""
-        return {
+        d = {
             "id": self.id,
             "street": self.street,
             "sim_id": self.sim_id,
@@ -38,8 +57,18 @@ class PuzzleSlot:
             "parent_slot_id": self.parent_slot_id,
             "action_path": self.action_path,
             "board": self.board,
+            "planned_hero_hand": self.planned_hero_hand,
             "status": self.status,
         }
+        if self.tree_path is not None:
+            d["tree_path"] = self.tree_path
+        if self.top_combos is not None:
+            d["top_combos"] = self.top_combos
+        if self.line is not None:
+            d["line"] = self.line
+        if self.decision_idx is not None:
+            d["decision_idx"] = self.decision_idx
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "PuzzleSlot":
@@ -52,7 +81,12 @@ class PuzzleSlot:
             parent_slot_id=data.get("parent_slot_id"),
             action_path=data.get("action_path"),
             board=data.get("board"),
+            planned_hero_hand=data.get("planned_hero_hand"),
             status=data.get("status", "empty"),
+            tree_path=data.get("tree_path"),
+            top_combos=data.get("top_combos"),
+            line=data.get("line"),
+            decision_idx=data.get("decision_idx"),
         )
 
 
@@ -244,10 +278,13 @@ class ScheduledPuzzle:
     difficulty: int
     tags: list[str]
     created_at: datetime
+    order: int | None = None  # Display order within the day (1-10)
+    flavor_text: str | None = None  # AI-generated blurb shown before the puzzle
+    spot_type: str | None = None  # Classification: C-Betting, Barreling, Probing, etc.
 
     def to_firestore(self) -> dict:
         """Convert to Firestore document format."""
-        return {
+        doc = {
             "id": self.id,
             "scheduled_date": self.scheduled_date,
             "QuestionText": self.question_text,
@@ -265,6 +302,13 @@ class ScheduledPuzzle:
             "Tags": self.tags,
             "created_at": self.created_at.isoformat(),
         }
+        if self.order is not None:
+            doc["Order"] = self.order
+        if self.flavor_text is not None:
+            doc["FlavorText"] = self.flavor_text
+        if self.spot_type is not None:
+            doc["spotType"] = self.spot_type
+        return doc
 
     @classmethod
     def from_firestore(cls, doc: dict) -> "ScheduledPuzzle":
@@ -300,6 +344,9 @@ class ScheduledPuzzle:
             action_frequencies=doc.get("ActionFrequencies", {}),
             difficulty=doc["Difficulty"],
             tags=doc["Tags"],
+            order=doc.get("Order"),
+            flavor_text=doc.get("FlavorText"),
+            spot_type=doc.get("spotType"),
             created_at=datetime.fromisoformat(doc["created_at"]),
         )
 
@@ -469,6 +516,8 @@ def _build_action_tree(spot: SpotCandidate) -> dict:
                         continue
 
                     pos, action_type, amount = parsed
+                    # Normalize position for 6-max (LJ -> UTG)
+                    pos = _normalize_position(pos)
 
                     # Update last_bet_amount for bets/raises
                     if action_type in ("Raise", "3Bet", "4Bet", "5Bet", "Bet") and amount is not None:

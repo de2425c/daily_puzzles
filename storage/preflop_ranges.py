@@ -40,8 +40,32 @@ class PreflopRangeStorage:
 
     COLLECTION = "9m100bb"
 
-    # Standard RFI positions in order
-    RFI_POSITIONS = ["UTG", "UTG1", "UTG2", "LJ", "HJ", "CO", "BTN", "SB"]
+    # 6-max RFI positions (shown in UI)
+    # Note: UTG in 6-max = LJ in 9-max (first to act)
+    RFI_POSITIONS_6MAX = ["UTG", "HJ", "CO", "BTN", "SB"]
+
+    # Mapping from 6-max display name to internal Firestore name
+    # UTG (6-max) -> LJ (9-max/Firestore)
+    POSITION_TO_FIRESTORE = {"UTG": "LJ"}
+
+    # Legacy 9-max positions (for reference)
+    RFI_POSITIONS_9MAX = ["UTG", "UTG1", "UTG2", "LJ", "HJ", "CO", "BTN", "SB"]
+
+    def _map_path_to_firestore(self, path: list[str]) -> list[str]:
+        """
+        Map UI path names to Firestore names.
+
+        Converts path elements like "UTG_RFI" to "LJ_RFI".
+        """
+        mapped = []
+        for element in path:
+            # Check if element starts with a position that needs mapping
+            for ui_pos, fs_pos in self.POSITION_TO_FIRESTORE.items():
+                if element.startswith(f"{ui_pos}_"):
+                    element = element.replace(f"{ui_pos}_", f"{fs_pos}_", 1)
+                    break
+            mapped.append(element)
+        return mapped
 
     def __init__(self, credentials_path: str | None = None):
         """
@@ -133,8 +157,8 @@ class PreflopRangeStorage:
         return doc_ids
 
     def get_rfi_positions(self) -> list[str]:
-        """Get available RFI positions."""
-        return self.RFI_POSITIONS
+        """Get available RFI positions for 6-max."""
+        return self.RFI_POSITIONS_6MAX
 
     def get_rfi_node(self, position: str) -> dict | None:
         """
@@ -142,7 +166,9 @@ class PreflopRangeStorage:
 
         Returns: {action, size, range, children: [...]}
         """
-        doc_name = f"{position}_RFI"
+        # Map 6-max position to Firestore name (UTG -> LJ)
+        firestore_pos = self.POSITION_TO_FIRESTORE.get(position, position)
+        doc_name = f"{firestore_pos}_RFI"
         path = f"{self.COLLECTION}/{doc_name}"
         doc = self._get_document(path)
 
@@ -166,7 +192,7 @@ class PreflopRangeStorage:
         Get node data at a path through the tree.
 
         Args:
-            path: ["BTN_RFI", "BB_3B", "BTN_Call"]
+            path: ["BTN_RFI", "BB_3B", "BTN_Call"] (can use 6-max names like "UTG_RFI")
 
         Returns:
             {name, action, size, range: {combo: freq, ...}, children: [...]}
@@ -174,15 +200,18 @@ class PreflopRangeStorage:
         if not path:
             return None
 
+        # Map 6-max names to Firestore names (UTG_RFI -> LJ_RFI)
+        mapped_path = self._map_path_to_firestore(path)
+
         # Build Firestore path
         # First element is the RFI document
         # Subsequent elements are in children subcollections
-        if len(path) == 1:
-            firestore_path = f"{self.COLLECTION}/{path[0]}"
+        if len(mapped_path) == 1:
+            firestore_path = f"{self.COLLECTION}/{mapped_path[0]}"
         else:
             # Build path like: 9m100bb/BTN_RFI/children/BB_3B/children/BTN_Call
-            parts = [self.COLLECTION, path[0]]
-            for p in path[1:]:
+            parts = [self.COLLECTION, mapped_path[0]]
+            for p in mapped_path[1:]:
                 parts.extend(["children", p])
             firestore_path = "/".join(parts)
 
@@ -212,12 +241,15 @@ class PreflopRangeStorage:
         if not path:
             return []
 
+        # Map 6-max names to Firestore names (UTG_RFI -> LJ_RFI)
+        mapped_path = self._map_path_to_firestore(path)
+
         # Build children path
-        if len(path) == 1:
-            children_path = f"{self.COLLECTION}/{path[0]}/children"
+        if len(mapped_path) == 1:
+            children_path = f"{self.COLLECTION}/{mapped_path[0]}/children"
         else:
-            parts = [self.COLLECTION, path[0]]
-            for p in path[1:]:
+            parts = [self.COLLECTION, mapped_path[0]]
+            for p in mapped_path[1:]:
                 parts.extend(["children", p])
             parts.append("children")
             children_path = "/".join(parts)

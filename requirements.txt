@@ -10,6 +10,9 @@ requests>=2.28.0
 # Environment
 python-dotenv>=1.0.0
 
+# AI
+anthropic>=0.39.0
+
 # Google Cloud
 google-cloud-firestore>=2.13.0
 google-cloud-storage>=2.13.0

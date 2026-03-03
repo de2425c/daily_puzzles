@@ -250,6 +250,9 @@ class FullScheduledPuzzleResponse(BaseModel):
     action_frequencies: dict[str, float]
     difficulty: int
     tags: list[str]
+    order: int | None = None
+    flavor_text: str | None = None
+    spot_type: str | None = None
     created_at: str
 
 
@@ -263,6 +266,8 @@ class UpdatePuzzleRequest(BaseModel):
     difficulty: int | None = None
     tags: list[str] | None = None
     scheduled_date: str | None = None
+    order: int | None = None
+    flavor_text: str | None = None
 
 
 # =============================================================================
@@ -347,7 +352,12 @@ class PuzzleSlotResponse(BaseModel):
     parent_slot_id: str | None = None
     action_path: str | None = None
     board: str | None = None
+    planned_hero_hand: str | None = None
     status: str = "empty"  # "empty", "sim_ready", "complete"
+    tree_path: str | None = None
+    top_combos: list[dict] | None = None
+    line: list[str] | None = None
+    decision_idx: int | None = None
 
 
 class PreflopConfigResponse(BaseModel):
@@ -411,6 +421,41 @@ class CreateChildSlotSimRequest(BaseModel):
     iterations: int = 500
 
 
+class WalkLineRequest(BaseModel):
+    """Request to walk an action line in an existing slot's sim tree."""
+
+    line: list[str]  # Full action sequence for the street
+    decision_idx: int  # Index in line where hero decides
+
+
+class NodeInfoRequest(BaseModel):
+    """Request to get node info after walking a partial line."""
+
+    line: list[str] = []  # Partial action sequence to walk first
+
+
+class NodeActionInfo(BaseModel):
+    """Action info at a tree node with aggregate frequency."""
+
+    label: str  # "Check", "Bet 33%"
+    token: str  # "check", "bet", "bet33", etc. for the line builder
+    freq: float  # Aggregate frequency across the range (0-1)
+
+
+class NodeInfoResponse(BaseModel):
+    """Response with node info: actions + frequencies, optional strategy."""
+
+    position: str  # "IP" or "OOP" - who acts here
+    is_terminal: bool
+    actions: list[NodeActionInfo] = []
+    # Strategy at this node for the acting player (13x13 grid format)
+    # Dict of hand_label -> {weight, actions: {action_label: freq}}
+    range_grid: dict[str, dict] | None = None
+    # Per-combo details for suit-specific breakdown
+    # Format: {"J9s": [{"combo": "Js9s", "weight": 0.92, "actions": {"Check": 0.95}}]}
+    combo_details: dict[str, list[dict]] | None = None
+
+
 class CompatibleSimResponse(BaseModel):
     """Response for a compatible sim that can be linked to a slot."""
 
@@ -421,3 +466,66 @@ class CompatibleSimResponse(BaseModel):
     oop_position: str
     street: str
     created_at: str
+
+
+class PuzzleTreeDataResponse(BaseModel):
+    """Response for puzzle tree navigation data."""
+
+    sim_id: str | None
+    tree_path: str | None
+    board: str | None
+    ip_position: str | None
+    oop_position: str | None
+    has_tree: bool
+
+
+# =============================================================================
+# Import Pipeline Schemas
+# =============================================================================
+
+
+class ImportSpot(BaseModel):
+    """A single spot in the import JSON (v2: line-based).
+
+    The `line` field specifies the full action sequence for the street.
+    `decision_idx` marks where hero faces a decision.
+    Actions before decision_idx are walked to reach the node.
+    Actions after decision_idx resolve the street (for child sims).
+
+    Valid tokens: "check", "bet", "bet33", "bet75", "bet125", "raise", "call", "allin"
+    Plain "bet" picks the smallest bet size (most common sizing).
+    """
+
+    board: str
+    hero_position: str  # e.g. "BTN", "BB", "CO"
+    street: str  # "flop", "turn", "river"
+    line: list[str] = []  # Full street action sequence
+    decision_idx: int = 0  # Index in line where hero decides
+
+
+class ImportScenario(BaseModel):
+    """A scenario in the import JSON."""
+
+    preflop: list[str]  # e.g. ["CO_RFI", "BB_Call"]
+    spots: list[ImportSpot]
+
+
+class ImportDayPlanRequest(BaseModel):
+    """Request to import a full day plan from JSON."""
+
+    date: str  # YYYY-MM-DD
+    scenarios: list[ImportScenario]
+
+
+class ImportDayPlanResponse(BaseModel):
+    """Response from importing a day plan."""
+
+    day_plan: DayPlanResponse
+    flop_spots_created: int
+    errors: list[str]
+
+
+class PickComboRequest(BaseModel):
+    """Request to pick a hero combo for a slot."""
+
+    combo: str  # e.g. "KsKc"

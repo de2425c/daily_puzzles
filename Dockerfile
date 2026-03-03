@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY deepsolver/ ./deepsolver/
 COPY storage/ ./storage/
 COPY api/ ./api/
+COPY utils/ ./utils/
 
 # Copy data files
 COPY solver_hand_order.txt .

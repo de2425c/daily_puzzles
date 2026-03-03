@@ -70,10 +70,6 @@ async function selectDate(dateStr) {
   }
 }
 
-function goToSims() {
-  router.push('/sims')
-}
-
 function startDayPlan(dateStr) {
   router.push(`/day-plan/${dateStr}`)
 }
@@ -114,6 +110,33 @@ async function savePuzzle(data) {
     error.value = e.message
   } finally {
     saving.value = false
+  }
+}
+
+function viewInSolver(puzzle) {
+  // Navigate to the puzzle review/edit page
+  router.push({
+    path: `/puzzles/${puzzle.id}/edit`,
+    query: { date: puzzle.scheduled_date }
+  })
+}
+
+async function deletePuzzle(puzzle) {
+  if (!confirm(`Delete this puzzle?\n\n"${puzzle.question_text}"`)) {
+    return
+  }
+
+  try {
+    await api.deletePuzzle(puzzle.id)
+    // Remove from list
+    selectedPuzzles.value = selectedPuzzles.value.filter(p => p.id !== puzzle.id)
+    // Update the count in workflowStatus
+    const dateItem = workflowStatus.value.dates.find(d => d.date === selectedDate.value)
+    if (dateItem) {
+      dateItem.count = Math.max(0, dateItem.count - 1)
+    }
+  } catch (e) {
+    error.value = e.response?.data?.detail || e.message
   }
 }
 </script>
@@ -176,6 +199,8 @@ async function savePuzzle(data) {
               :key="puzzle.id"
               :puzzle="puzzle"
               @edit="openEdit"
+              @view-solver="viewInSolver"
+              @delete="deletePuzzle"
             />
           </div>
         </div>
@@ -189,16 +214,6 @@ async function savePuzzle(data) {
         @save="savePuzzle"
       />
 
-      <div class="actions-section">
-        <h2>Quick Actions</h2>
-        <div class="action-cards">
-          <div class="action-card" @click="goToSims">
-            <div class="action-icon">&#9881;</div>
-            <div class="action-title">Sim Library</div>
-            <div class="action-desc">Browse sims and generate spots</div>
-          </div>
-        </div>
-      </div>
     </template>
   </div>
 </template>
@@ -425,51 +440,6 @@ h2 {
 .tag.diff-3 {
   background: #f8d7da;
   color: #721c24;
-}
-
-/* Actions */
-.actions-section {
-  background: #fff;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.action-cards {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.action-card {
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 20px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: 2px solid transparent;
-}
-
-.action-card:hover {
-  background: #e9ecef;
-  border-color: #1976d2;
-}
-
-.action-icon {
-  font-size: 32px;
-  margin-bottom: 12px;
-}
-
-.action-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.action-desc {
-  font-size: 13px;
-  color: #666;
 }
 
 /* Responsive */

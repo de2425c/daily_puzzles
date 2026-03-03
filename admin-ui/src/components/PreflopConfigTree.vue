@@ -9,10 +9,14 @@ const props = defineProps({
   existingSims: {
     type: Array,
     default: () => []
+  },
+  puzzleMap: {
+    type: Object,
+    default: () => ({})
   }
 })
 
-const emit = defineEmits(['slot-click', 'link-sim'])
+const emit = defineEmits(['slot-click', 'link-sim', 'reset-slot', 'pick-combo'])
 
 // Group existing sims by street
 const simsByStreet = computed(() => {
@@ -73,8 +77,11 @@ function getSlotStatusClass(slot) {
 }
 
 function getSlotStatusText(slot) {
-  if (slot.status === 'empty') return 'Add Board'
-  if (slot.status === 'sim_ready') return 'Fill Puzzle'
+  if (slot.status === 'empty') {
+    if (slot.planned_hero_hand && slot.street !== 'flop') return 'Waiting'
+    return 'Add Board'
+  }
+  if (slot.status === 'sim_ready') return slot.top_combos ? 'Pick Combo' : 'Fill Puzzle'
   if (slot.status === 'complete') return 'Done'
   return slot.status
 }
@@ -99,6 +106,19 @@ function onSlotClick(slot) {
 
 function linkExistingSim(slot, sim) {
   emit('link-sim', slot, sim.id)
+}
+
+function resetSlot(slot) {
+  emit('reset-slot', slot)
+}
+
+function onPickCombo(slot, combo) {
+  emit('pick-combo', slot, combo)
+}
+
+function getPuzzle(slot) {
+  if (!slot.puzzle_id) return null
+  return props.puzzleMap[slot.puzzle_id] || null
 }
 
 // Find existing sims that match a slot's street
@@ -131,9 +151,35 @@ function getMatchingSimsForSlot(slot) {
         <div class="slot-header">
           <span class="slot-street">FLOP {{ branchIdx + 1 }}</span>
           <span class="slot-status">{{ getSlotStatusText(branch.slot) }}</span>
+          <button
+            v-if="branch.slot.status !== 'empty'"
+            class="remove-btn"
+            title="Remove this spot"
+            @click.stop="resetSlot(branch.slot)"
+          >&times;</button>
         </div>
         <div v-if="branch.slot.board" class="slot-board">
           {{ formatBoard(branch.slot.board) }}
+          <span v-if="branch.slot.planned_hero_hand" class="planned-hand">| {{ branch.slot.planned_hero_hand }}</span>
+        </div>
+        <!-- Top combos picker for sim_ready slots -->
+        <div v-if="branch.slot.status === 'sim_ready' && branch.slot.top_combos && branch.slot.top_combos.length > 0" class="top-combos" @click.stop>
+          <div class="combos-label">Pick hero hand:</div>
+          <div class="combos-list">
+            <button
+              v-for="(tc, idx) in branch.slot.top_combos.slice(0, 10)"
+              :key="idx"
+              class="combo-chip"
+              @click.stop="onPickCombo(branch.slot, tc.combo)"
+              :title="`${tc.action} @ ${(tc.freq * 100).toFixed(0)}%`"
+            >
+              {{ tc.combo }} <span class="combo-freq">{{ (tc.freq * 100).toFixed(0) }}%</span>
+            </button>
+          </div>
+        </div>
+        <div v-if="getPuzzle(branch.slot)" class="slot-puzzle-info">
+          <span class="puzzle-hero">Hero: {{ getPuzzle(branch.slot).hero }}</span>
+          <span class="puzzle-question">{{ getPuzzle(branch.slot).question_text }}</span>
         </div>
         <!-- Existing sims for empty flop slots -->
         <div v-if="branch.slot.status === 'empty' && getMatchingSimsForSlot(branch.slot).length > 0" class="existing-sims">
@@ -168,9 +214,22 @@ function getMatchingSimsForSlot(slot) {
             <div class="slot-header">
               <span class="slot-street">TURN {{ branchIdx + 1 }}</span>
               <span class="slot-status">{{ isSlotBlocked(turnBranch.slot) ? 'Blocked' : getSlotStatusText(turnBranch.slot) }}</span>
+              <button
+                v-if="turnBranch.slot.status !== 'empty'"
+                class="remove-btn"
+                title="Remove this spot"
+                @click.stop="resetSlot(turnBranch.slot)"
+              >&times;</button>
             </div>
             <div v-if="turnBranch.slot.board" class="slot-board">
               {{ formatBoard(turnBranch.slot.board) }}
+            </div>
+            <div v-if="turnBranch.slot.planned_hero_hand && turnBranch.slot.status === 'empty'" class="slot-planned">
+              {{ formatBoard(turnBranch.slot.board || '') }} + ? | {{ turnBranch.slot.planned_hero_hand }}
+            </div>
+            <div v-if="getPuzzle(turnBranch.slot)" class="slot-puzzle-info">
+              <span class="puzzle-hero">Hero: {{ getPuzzle(turnBranch.slot).hero }}</span>
+              <span class="puzzle-question">{{ getPuzzle(turnBranch.slot).question_text }}</span>
             </div>
           </div>
 
@@ -190,9 +249,22 @@ function getMatchingSimsForSlot(slot) {
                 <div class="slot-header">
                   <span class="slot-street">RIVER</span>
                   <span class="slot-status">{{ isSlotBlocked(riverBranch.slot) ? 'Blocked' : getSlotStatusText(riverBranch.slot) }}</span>
+                  <button
+                    v-if="riverBranch.slot.status !== 'empty'"
+                    class="remove-btn"
+                    title="Remove this spot"
+                    @click.stop="resetSlot(riverBranch.slot)"
+                  >&times;</button>
                 </div>
                 <div v-if="riverBranch.slot.board" class="slot-board">
                   {{ formatBoard(riverBranch.slot.board) }}
+                </div>
+                <div v-if="riverBranch.slot.planned_hero_hand && riverBranch.slot.status === 'empty'" class="slot-planned">
+                  {{ formatBoard(riverBranch.slot.board || '') }} + ? | {{ riverBranch.slot.planned_hero_hand }}
+                </div>
+                <div v-if="getPuzzle(riverBranch.slot)" class="slot-puzzle-info">
+                  <span class="puzzle-hero">Hero: {{ getPuzzle(riverBranch.slot).hero }}</span>
+                  <span class="puzzle-question">{{ getPuzzle(riverBranch.slot).question_text }}</span>
                 </div>
               </div>
             </div>
@@ -271,6 +343,30 @@ function getMatchingSimsForSlot(slot) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+}
+
+.remove-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.remove-btn:hover {
+  background: #ffebee;
+  color: #dc3545;
 }
 
 .slot-street {
@@ -370,5 +466,87 @@ function getMatchingSimsForSlot(slot) {
 .sim-chip:hover {
   background: #bbdefb;
   border-color: #1976d2;
+}
+
+/* Puzzle info on completed slots */
+.slot-puzzle-info {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.puzzle-hero {
+  font-size: 11px;
+  font-weight: 600;
+  color: #1976d2;
+}
+
+.puzzle-question {
+  font-size: 11px;
+  color: #555;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-planned {
+  margin-top: 6px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #7b1fa2;
+  font-weight: 500;
+}
+
+.planned-hand {
+  color: #7b1fa2;
+  font-weight: 500;
+  margin-left: 6px;
+}
+
+/* Top combos picker */
+.top-combos {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #ffc107;
+}
+
+.combos-label {
+  font-size: 10px;
+  color: #f57c00;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.combos-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.combo-chip {
+  padding: 3px 8px;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.combo-chip:hover {
+  background: #ffe0b2;
+  border-color: #f57c00;
+}
+
+.combo-freq {
+  color: #e65100;
+  font-weight: 600;
+  margin-left: 2px;
 }
 </style>

@@ -115,6 +115,7 @@ const gridData = computed(() => {
         isHero: heroCategory && heroCategory.ranks === (isPair ? label : label.slice(0, 2)) &&
                 (isPair || (isSuited ? heroCategory.type === 'suited' : heroCategory.type === 'offsuit')),
         combos: [],  // Store available combos for clicking
+        comboDetails: [],  // Full combo data for tooltip
         actionSums: props.strategy ? new Array(props.strategy.length).fill(0) : []  // Sum of strategy per action
       }
     })
@@ -152,8 +153,16 @@ const gridData = computed(() => {
 
     if (blocked) {
       cell.blockedCount++
+      cell.comboDetails.push({ name: combo, weight: 0, blocked: true, frequencies: null })
     } else {
       cell.weightSum += weight
+      // Store combo details for ALL non-blocked combos (for tooltip)
+      cell.comboDetails.push({
+        name: combo,
+        weight: weight,
+        blocked: false,
+        frequencies: props.strategy ? props.strategy.map(row => row[idx]) : null
+      })
       if (weight > 0) {
         cell.activeCount++
         cell.combos.push(combo)  // Store combo for clicking
@@ -242,6 +251,44 @@ function getCellTooltip(cell) {
   const actionTooltip = getActionTooltip(cell)
   if (actionTooltip) {
     tooltip += '\n\n' + actionTooltip
+  }
+
+  // Combo breakdown
+  if (cell.comboDetails.length > 0) {
+    tooltip += '\n\n--- Combos ---'
+
+    // Sort: active combos first (by weight desc), then zero-weight, then blocked
+    const sorted = [...cell.comboDetails].sort((a, b) => {
+      if (a.blocked && !b.blocked) return 1
+      if (!a.blocked && b.blocked) return -1
+      return b.weight - a.weight
+    })
+
+    for (const combo of sorted) {
+      if (combo.blocked) {
+        tooltip += `\n${combo.name}: blocked`
+      } else {
+        const pct = (combo.weight / 10000 * 100).toFixed(0)
+        tooltip += `\n${combo.name}: ${pct}%`
+
+        // Add action frequencies if available and weight > 0
+        if (combo.weight > 0 && combo.frequencies && props.actionNames) {
+          const freqSum = combo.frequencies.reduce((s, f) => s + f, 0)
+          if (freqSum > 0) {
+            const actionLines = []
+            for (let i = 0; i < props.actionNames.length; i++) {
+              const freq = (combo.frequencies[i] / freqSum) * 100
+              if (freq > 0.5) {
+                actionLines.push(`${props.actionNames[i]}: ${freq.toFixed(0)}%`)
+              }
+            }
+            if (actionLines.length > 0) {
+              tooltip += '\n  ' + actionLines.join(', ')
+            }
+          }
+        }
+      }
+    }
   }
 
   if (props.clickable && cell.combos.length > 0) {

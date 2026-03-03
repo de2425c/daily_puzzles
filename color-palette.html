@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Poker App Color Palette</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, sans-serif; background: #0F1114; color: #F0F2F5; padding: 32px; }
+    h1 { margin-bottom: 24px; font-size: 24px; }
+    h2 { font-size: 14px; color: #9BA3B0; margin: 24px 0 12px; text-transform: uppercase; letter-spacing: 1px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    .swatch {
+      width: 140px; padding: 16px 12px; border-radius: 8px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .swatch-color { height: 40px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.08); }
+    .swatch-name { font-size: 12px; font-weight: 600; }
+    .swatch-hex { font-size: 11px; color: #5C6370; font-family: monospace; }
+    .demo-card {
+      background: #14373C; border-radius: 12px; padding: 20px; margin-top: 32px;
+      border: 1px solid rgba(255,255,255,0.08); max-width: 400px;
+    }
+    .demo-title { color: #F0F2F5; font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+    .demo-body { color: #9BA3B0; font-size: 14px; margin-bottom: 12px; }
+    .demo-hint { color: #5C6370; font-size: 12px; }
+    .demo-actions { display: flex; gap: 8px; margin-top: 16px; }
+    .btn { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; }
+    .btn-fold { background: #6B7280; color: #F0F2F5; }
+    .btn-call { background: #3B82F6; color: #F0F2F5; }
+    .btn-raise { background: #4ADE80; color: #0F1114; }
+  </style>
+</head>
+<body>
+  <h1>Poker App Color Palette</h1>
+
+  <h2>Backgrounds</h2>
+  <div class="row">
+    <div class="swatch" style="background:#1a1a1a">
+      <div class="swatch-color" style="background:#0F1114"></div>
+      <span class="swatch-name">background</span>
+      <span class="swatch-hex">#0F1114</span>
+    </div>
+    <div class="swatch" style="background:#1a1a1a">
+      <div class="swatch-color" style="background:#14373C"></div>
+      <span class="swatch-name">surface</span>
+      <span class="swatch-hex">#14373C</span>
+    </div>
+    <div class="swatch" style="background:#1a1a1a">
+      <div class="swatch-color" style="background:#252A33"></div>
+      <span class="swatch-name">surfaceRaised</span>
+      <span class="swatch-hex">#252A33</span>
+    </div>
+  </div>
+
+  <h2>Text</h2>
+  <div class="row">
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#F0F2F5"></div>
+      <span class="swatch-name">textPrimary</span>
+      <span class="swatch-hex">#F0F2F5</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#9BA3B0"></div>
+      <span class="swatch-name">textSecondary</span>
+      <span class="swatch-hex">#9BA3B0</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#5C6370"></div>
+      <span class="swatch-name">textMuted</span>
+      <span class="swatch-hex">#5C6370</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#3D4450"></div>
+      <span class="swatch-name">textPlaceholder</span>
+      <span class="swatch-hex">#3D4450</span>
+    </div>
+  </div>
+
+  <h2>Semantic</h2>
+  <div class="row">
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#4ADE80"></div>
+      <span class="swatch-name">positive</span>
+      <span class="swatch-hex">#4ADE80</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#EF4444"></div>
+      <span class="swatch-name">negative</span>
+      <span class="swatch-hex">#EF4444</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#F59E0B"></div>
+      <span class="swatch-name">warning</span>
+      <span class="swatch-hex">#F59E0B</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#3B82F6"></div>
+      <span class="swatch-name">info</span>
+      <span class="swatch-hex">#3B82F6</span>
+    </div>
+  </div>
+
+  <h2>Poker Actions</h2>
+  <div class="row">
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#6B7280"></div>
+      <span class="swatch-name">actionFold</span>
+      <span class="swatch-hex">#6B7280</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#3B82F6"></div>
+      <span class="swatch-name">actionCall</span>
+      <span class="swatch-hex">#3B82F6</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#4ADE80"></div>
+      <span class="swatch-name">actionRaise</span>
+      <span class="swatch-hex">#4ADE80</span>
+    </div>
+    <div class="swatch" style="background:#14373C">
+      <div class="swatch-color" style="background:#FB923C"></div>
+      <span class="swatch-name">streak</span>
+      <span class="swatch-hex">#FB923C</span>
+    </div>
+  </div>
+
+  <h2>Demo Card</h2>
+  <div class="demo-card">
+    <div class="demo-title">You hold A&#9824; K&#9829;</div>
+    <div class="demo-body">Pot: $150 &middot; To call: $50</div>
+    <div class="demo-hint">Hero is on the button</div>
+    <div class="demo-actions">
+      <button class="btn btn-fold">Fold</button>
+      <button class="btn btn-call">Call $50</button>
+      <button class="btn btn-raise">Raise $120</button>
+    </div>
+  </div>
+</body>
+</html>

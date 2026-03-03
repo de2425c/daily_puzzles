@@ -15,7 +15,8 @@ from .tree_parser import (
     get_node_by_path,
     UNITS_PER_BB,
 )
-from .hand_utils import HAND_ORDER, is_combo_blocked, RANK_ORDER
+from .hand_utils import HAND_ORDER, is_combo_blocked, RANK_ORDER, normalize_combo
+from .preflop_calc import normalize_position_for_6max
 
 
 def get_actual_pot(node: TreeNode) -> int:
@@ -709,9 +710,11 @@ def extract_random_spot_same_street(
         if _is_donk_bet_spot(node, tree.street_id) and best_action.lower().startswith("bet"):
             continue
 
-        # Build the spot
+        # Build the spot (normalize positions for 6-max: LJ -> UTG)
         hero_position = oop_position if node.player_id == 1 else ip_position
         villain_position = ip_position if node.player_id == 1 else oop_position
+        hero_position = normalize_position_for_6max(hero_position)
+        villain_position = normalize_position_for_6max(villain_position)
 
         ev_by_action = get_ev_by_action(node, node.player_id, combo_idx)
 
@@ -877,9 +880,11 @@ def extract_random_river_spot(
         if _is_donk_bet_spot(node, tree.street_id) and best_action.lower().startswith("bet"):
             continue
 
-        # Get position info
+        # Get position info (normalize for 6-max: LJ -> UTG)
         hero_position = oop_position if node.player_id == 1 else ip_position
         villain_position = ip_position if node.player_id == 1 else oop_position
+        hero_position = normalize_position_for_6max(hero_position)
+        villain_position = normalize_position_for_6max(villain_position)
 
         # Get EV by action
         ev_by_action = get_ev_by_action(node, node.player_id, combo_idx)
@@ -991,9 +996,11 @@ class SpotExtractor:
             if node.strategy is None or node.actions is None:
                 continue
 
-            # Get position info
+            # Get position info (normalize for 6-max: LJ -> UTG)
             hero_position = oop_position if node.player_id == 1 else ip_position
             villain_position = ip_position if node.player_id == 1 else oop_position
+            hero_position = normalize_position_for_6max(hero_position)
+            villain_position = normalize_position_for_6max(villain_position)
 
             # Get hero's range
             hero_range = oop_range if node.player_id == 1 else ip_range
@@ -1097,7 +1104,7 @@ def create_spot_at_path(
     task_id: str = "",
     stack_size_bb: float = 100.0,
     previous_street_actions: list[dict] | None = None,
-) -> SpotCandidate | None:
+) -> SpotCandidate | str | None:
     """
     Create a spot at a specific tree path for a specific combo.
 
@@ -1117,38 +1124,49 @@ def create_spot_at_path(
             e.g., [{"street": "flop", "cards": "Ah-Kh-Tc", "actions": "BB checks, LJ bets 1.6bb, BB calls"}]
 
     Returns:
-        SpotCandidate or None if path/combo is invalid
+        SpotCandidate on success, error string on failure, or None for silent skip
     """
     # Navigate to the node
     node = get_node_by_path(tree, path)
     if node is None:
-        return None
+        return f"path '{path}' not found in tree"
 
     # Check if this is a decision node (not terminal)
     if node.is_terminal():
-        return None
+        return f"node at path '{path}' is terminal (no decision)"
+
+    # Normalize combo to canonical format (e.g., "AdAh" -> "AhAd")
+    try:
+        combo = normalize_combo(combo)
+    except ValueError as e:
+        return f"invalid combo: {e}"
 
     # Check if combo is valid and not blocked
     if is_combo_blocked(combo, board):
-        return None
+        return f"{combo} blocked by board {board}"
 
     try:
         combo_idx = HAND_ORDER.index(combo)
     except ValueError:
-        return None
+        return f"invalid combo format: {combo}"
 
     # Check if combo is in range for the player to act
     if node.ranges is None:
-        return None
+        return f"no ranges at node (path={path})"
 
     player_range = node.ranges[node.player_id]
-    if player_range[combo_idx] <= 0:
-        return None
+    position = oop_position if node.player_id == 1 else ip_position
+    actual_weight = player_range[combo_idx]
+    if actual_weight <= 0:
+        # Debug: check root ranges too
+        root_range_ip = tree.ranges[0][combo_idx] if tree.ranges else "no ranges"
+        root_range_oop = tree.ranges[1][combo_idx] if tree.ranges else "no ranges"
+        return f"{combo} not in {position}'s range (weight={actual_weight} at path={path}, player_id={node.player_id}, root_weights: IP={root_range_ip}, OOP={root_range_oop})"
 
     # Get strategy for this combo
     strategy = get_strategy_for_combo(node, combo_idx)
     if not strategy:
-        return None
+        return f"no strategy for {combo} at path={path}"
 
     # Find the "correct" action (highest frequency)
     sorted_actions = sorted(strategy.items(), key=lambda x: x[1], reverse=True)
@@ -1157,9 +1175,11 @@ def create_spot_at_path(
     # Get EVs
     ev_by_action = get_ev_by_action(node, node.player_id, combo_idx)
 
-    # Determine hero/villain positions
+    # Determine hero/villain positions (normalize for 6-max: LJ -> UTG)
     hero_position = oop_position if node.player_id == 1 else ip_position
     villain_position = ip_position if node.player_id == 1 else oop_position
+    hero_position = normalize_position_for_6max(hero_position)
+    villain_position = normalize_position_for_6max(villain_position)
 
     # Build action sequence
     action_seq = _build_action_sequence(
@@ -1200,3 +1220,316 @@ def create_spot_at_path(
         board_texture=categorize_board(board),
         street_actions=street_actions,
     )
+
+
+def walk_action_line(
+    tree: TreeNode,
+    line: list[str],
+) -> TreeNode | None:
+    """
+    Walk the tree following an explicit action line to reach a decision node.
+
+    Each entry in `line` is an action type: "check", "bet", "raise", "call", "allin".
+    No sizes needed — when multiple children match (e.g. multiple bet sizes),
+    we pick the one with the smallest bet (most common/standard sizing).
+
+    After exhausting all actions in `line`, returns the resulting node
+    (where hero should be acting).
+
+    Args:
+        tree: Root TreeNode
+        line: List of action strings, e.g. ["check", "bet", "raise"]
+
+    Returns:
+        The TreeNode after following all actions, or None if path is invalid
+    """
+    node = tree
+
+    for action_str in line:
+        if node.is_terminal() or not node.children:
+            return None
+
+        action_lower = action_str.strip().lower()
+        matched_child = None
+
+        if action_lower in ("check", "call"):
+            # Match the ":c" child
+            for child in node.children:
+                if child.path.split(":")[-1] == "c":
+                    matched_child = child
+                    break
+
+        elif action_lower in ("bet", "raise"):
+            # Match any bet child (":bNNN"). Pick the smallest bet size (most standard).
+            bet_children = []
+            for child in node.children:
+                last = child.path.split(":")[-1]
+                if last.startswith("b"):
+                    try:
+                        size = int(last[1:])
+                        bet_children.append((size, child))
+                    except ValueError:
+                        bet_children.append((0, child))
+            if bet_children:
+                bet_children.sort(key=lambda x: x[0])
+                matched_child = bet_children[0][1]  # smallest bet
+
+        elif action_lower in ("bet33", "bet75", "bet125"):
+            # Match bet child closest to the specified % of pot
+            pct_map = {"bet33": 0.33, "bet75": 0.75, "bet125": 1.25}
+            target_pct = pct_map[action_lower]
+            actual_pot = get_actual_pot(node)
+            target_size = int(actual_pot * target_pct)
+            bet_children = []
+            for child in node.children:
+                last = child.path.split(":")[-1]
+                if last.startswith("b"):
+                    try:
+                        size = int(last[1:])
+                        bet_children.append((abs(size - target_size), size, child))
+                    except ValueError:
+                        pass
+            if bet_children:
+                bet_children.sort(key=lambda x: x[0])
+                matched_child = bet_children[0][2]  # closest to target
+
+        elif action_lower in ("allin", "all-in", "all in"):
+            # Match the largest bet child (likely allin)
+            bet_children = []
+            for child in node.children:
+                last = child.path.split(":")[-1]
+                if last.startswith("b"):
+                    try:
+                        size = int(last[1:])
+                        bet_children.append((size, child))
+                    except ValueError:
+                        pass
+            if bet_children:
+                bet_children.sort(key=lambda x: x[0], reverse=True)
+                matched_child = bet_children[0][1]  # largest bet
+
+        elif action_lower == "fold":
+            for child in node.children:
+                if child.path.split(":")[-1] == "f":
+                    matched_child = child
+                    break
+
+        if matched_child is None:
+            return None
+
+        node = matched_child
+
+    return node
+
+
+def get_top_combos_at_node(
+    node: TreeNode,
+    board: str,
+    limit: int = 20,
+) -> list[dict]:
+    """Get combos ranked by how strongly they take the most frequent action.
+
+    For each combo in range at this node, get its strategy, find the action
+    with the highest aggregate frequency across the range, then rank combos
+    by that action's frequency. Shows "which hands most want to be here."
+
+    Returns list of {"combo": "KsKc", "position": "IP", "freq": 0.92, "action": "Bet 1.6bb"}
+    sorted by frequency descending.
+    """
+    if node.strategy is None or node.actions is None or node.ranges is None:
+        return []
+
+    player_range = node.ranges[node.player_id]
+    position = "IP" if node.player_id == 0 else "OOP"
+
+    # Find most frequent action across the range (aggregate)
+    action_totals = {}
+    for i, action in enumerate(node.actions):
+        action_name = format_action(action, node.pot_size)
+        if action_name.lower() == "fold":
+            continue
+        total = sum(
+            node.strategy[i][ci] * player_range[ci]
+            for ci in range(1326)
+            if player_range[ci] > 0 and not is_combo_blocked(HAND_ORDER[ci], board)
+        )
+        action_totals[action_name] = (total, i)
+
+    if not action_totals:
+        return []
+
+    # Pick the action with highest total weight
+    best_action_name = max(action_totals, key=lambda k: action_totals[k][0])
+    best_action_idx = action_totals[best_action_name][1]
+
+    # Rank combos by their frequency for this action
+    combos = []
+    for ci in range(1326):
+        if player_range[ci] <= 0:
+            continue
+        combo_str = HAND_ORDER[ci]
+        if is_combo_blocked(combo_str, board):
+            continue
+        freq = node.strategy[best_action_idx][ci]
+        if freq > 0.01:
+            combos.append({
+                "combo": combo_str,
+                "position": position,
+                "freq": round(freq, 3),
+                "action": best_action_name,
+            })
+
+    combos.sort(key=lambda x: x["freq"], reverse=True)
+    return combos[:limit]
+
+
+def get_combo_freqs_for_line_token(
+    node: TreeNode,
+    line_token: str,
+    board: str,
+) -> dict[int, float]:
+    """Get per-combo frequency for the action matching a line token at a decision node.
+
+    Uses the same matching logic as walk_action_line to find which tree action
+    corresponds to the token (e.g., "bet" → smallest bet child).
+
+    Returns dict mapping combo_idx → frequency (0-1).
+    """
+    if node.strategy is None or node.actions is None or node.ranges is None:
+        return {}
+
+    token_lower = line_token.strip().lower()
+    matched_action_idx = None
+
+    if token_lower in ("check", "call"):
+        for i, child in enumerate(node.children):
+            if child.path.split(":")[-1] == "c":
+                matched_action_idx = i
+                break
+
+    elif token_lower in ("bet", "raise"):
+        bet_children = []
+        for i, child in enumerate(node.children):
+            last = child.path.split(":")[-1]
+            if last.startswith("b"):
+                try:
+                    size = int(last[1:])
+                    bet_children.append((size, i))
+                except ValueError:
+                    bet_children.append((0, i))
+        if bet_children:
+            bet_children.sort(key=lambda x: x[0])
+            matched_action_idx = bet_children[0][1]
+
+    elif token_lower in ("bet33", "bet75", "bet125"):
+        pct_map = {"bet33": 0.33, "bet75": 0.75, "bet125": 1.25}
+        target_pct = pct_map[token_lower]
+        actual_pot = get_actual_pot(node)
+        target_size = int(actual_pot * target_pct)
+        bet_children = []
+        for i, child in enumerate(node.children):
+            last = child.path.split(":")[-1]
+            if last.startswith("b"):
+                try:
+                    size = int(last[1:])
+                    bet_children.append((abs(size - target_size), i))
+                except ValueError:
+                    pass
+        if bet_children:
+            bet_children.sort(key=lambda x: x[0])
+            matched_action_idx = bet_children[0][1]
+
+    elif token_lower in ("allin", "all-in", "all in"):
+        bet_children = []
+        for i, child in enumerate(node.children):
+            last = child.path.split(":")[-1]
+            if last.startswith("b"):
+                try:
+                    size = int(last[1:])
+                    bet_children.append((size, i))
+                except ValueError:
+                    pass
+        if bet_children:
+            bet_children.sort(key=lambda x: x[0], reverse=True)
+            matched_action_idx = bet_children[0][1]
+
+    elif token_lower == "fold":
+        for i, child in enumerate(node.children):
+            if child.path.split(":")[-1] == "f":
+                matched_action_idx = i
+                break
+
+    if matched_action_idx is None:
+        return {}
+
+    player_range = node.ranges[node.player_id]
+    result = {}
+    for ci in range(1326):
+        if player_range[ci] > 0 and not is_combo_blocked(HAND_ORDER[ci], board):
+            result[ci] = node.strategy[matched_action_idx][ci]
+
+    return result
+
+
+def get_chain_top_combos(
+    chain_data: list[tuple[TreeNode, str, str, str]],
+    limit: int = 20,
+) -> list[dict]:
+    """Compute top combos across a chain of decision nodes.
+
+    Each entry in chain_data is (decision_node, line_token_at_decision, board, action_label).
+    The line_token is what hero does at that node (e.g., "bet", "check").
+
+    Multiplies per-combo frequencies across all nodes to find combos
+    that consistently take the specified line.
+
+    Returns list of {"combo": "KsKc", "freq": 0.72, "action": "chain"}
+    sorted by combined frequency descending.
+    """
+    if not chain_data:
+        return []
+
+    # Use the last board (longest) for blocking checks
+    full_board = max((cd[2] for cd in chain_data), key=len)
+
+    # Get per-combo freqs at each node
+    all_freqs = []
+    for node, token, board, _ in chain_data:
+        freqs = get_combo_freqs_for_line_token(node, token, board)
+        all_freqs.append(freqs)
+
+    if not all_freqs:
+        return []
+
+    # Get candidate combos (present in first node's range)
+    first_node = chain_data[0][0]
+    player_range = first_node.ranges[first_node.player_id] if first_node.ranges else None
+    if not player_range:
+        return []
+
+    combos = []
+    for ci in range(1326):
+        combo_str = HAND_ORDER[ci]
+        if is_combo_blocked(combo_str, full_board):
+            continue
+        if player_range[ci] <= 0:
+            continue
+
+        # Multiply frequencies across chain
+        combined = 1.0
+        for freqs in all_freqs:
+            combined *= freqs.get(ci, 0.0)
+            if combined < 0.001:
+                break
+
+        if combined > 0.01:
+            position = "IP" if first_node.player_id == 0 else "OOP"
+            combos.append({
+                "combo": combo_str,
+                "position": position,
+                "freq": round(combined, 3),
+                "action": "chain",
+            })
+
+    combos.sort(key=lambda x: x["freq"], reverse=True)
+    return combos[:limit]
